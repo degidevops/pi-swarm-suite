@@ -11,9 +11,9 @@ A single pi extension that provides three orchestration modes behind one runtime
 - Try it: `pi -e ./src/index.ts` (needs a configured model), or `pi install ./` for a local install
 
 ## Architecture (read docs/ARCHITECTURE.md first)
-- `src/runtime.ts` — ONE `Runtime`: launches every worker (concurrency, budget, ledger, abort, widget). All modes go through `Runtime.run()`. Never spawn processes anywhere else.
-- `src/core/` — building blocks: `child.ts` (arg/env/binary for children), `worker.ts` (one-shot JSON worker + `Collector`), `rpc.ts` (steerable RPC worker), `tasks.ts`, `mailbox.ts`, `journal.ts`, `git.ts`, `gates.ts`, `scope.ts`, `review.ts`, `eventlog.ts`, `config.ts`, `agents.ts`, `ledger.ts`, `pool.ts`, `util.ts`.
-- `src/child-tools.ts` — teammate-side tools (`team_message`, `team_inbox`, `team_tasks`); `src/ui.ts` — tool renderers.
+- `src/runtime.ts` — ONE `Runtime`: launches every worker (concurrency, budget, ledger, abort, widget). All modes go through `Runtime.run()`. Never spawn processes anywhere else. Also handles cross-process steer polling (`ensureSteerPolling`), per-agent costs (`agentCosts`), attach state (`listAttachableTeams`, `getTeamRunning`, `getTeamWorkers`, `getTeamJobs`).
+- `src/core/` — building blocks: `child.ts` (arg/env/binary for children), `worker.ts` (one-shot JSON worker + `Collector`), `rpc.ts` (steerable RPC worker), `tasks.ts`, `mailbox.ts`, `journal.ts`, `git.ts`, `gates.ts`, `scope.ts`, `review.ts`, `eventlog.ts`, `config.ts`, `agents.ts`, `ledger.ts`, `pool.ts`, `util.ts`, `attach.ts`, `transcript.ts`.
+- `src/child-tools.ts` — teammate-side tools (`team_message`, `team_inbox`, `team_tasks`, `team_task_request`); `src/ui.ts` — tool renderers; `src/ui-dashboard.ts` — `DashboardComponent` for `/swarm board`.
 - `src/modes/` — `delegate.ts`, `team.ts`, `workflow.ts`; each exports a tool factory taking `getRt(cwd)`.
 - `src/index.ts` — registers tools + `/swarm`. At `PI_SWARM_DEPTH >= 1` it registers ONLY the teammate tools (when `PI_SWARM_TEAM_DIR`/`PI_SWARM_MATE` are set), never orchestration tools.
 
@@ -40,7 +40,7 @@ A single pi extension that provides three orchestration modes behind one runtime
 - `PI_SWARM_PI_BIN=test/fixtures/fake-pi.mjs` swaps in the scripted pi. Directives (`FAIL:`, `COST:`, `SLEEP:`, `WRITE:`, `WRITE_BAD:`, `MSG:`, `DIALOG:`) are documented at the top of that file. Extend the fake when you add protocol features, and keep it faithful to pi's documented JSON/RPC events.
 
 ## Verify before finishing a change
-`npm run check` passes. If you touched `worker.ts`, `runtime.ts` or the tools, also smoke-load in real pi (see docs/ARCHITECTURE.md "Smoke test") and say what you could not test.
+`npm run check` passes. If you touched `worker.ts`, `runtime.ts`, `attach.ts` or the tools, also smoke-load in real pi (see docs/ARCHITECTURE.md "Smoke test") and say what you could not test.
 
 ## Not done yet
-See docs/ROADMAP.md. Do not claim real-model runs work: they are untested (only the scripted fake pi is). Also not built: interactive dashboard, split panes, conflict-resolution agent, session persistence.
+See docs/ROADMAP.md. Remaining items: Windows support (#10, untested), publish (#11, semver policy, pin minimum pi version). Real-model shakedown (#1) is complete — verified against `nvidia/nemotron-3.5-super-vl-120b-a12b`.
