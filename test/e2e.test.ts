@@ -39,6 +39,27 @@ describe("e2e: delegate", () => {
     expect(fs.existsSync(path.join(cwd, "a.txt"))).toBe(false);
   }, 30_000);
 
+  it("workers inherit the parent session model when nothing else is configured", async () => {
+    const cwd = mkRepo();
+    const { rt, logFile } = mkRuntime(cwd, { models: {} });
+    rt.sessionModel = "prov/session-model";
+    await run(delegateTool(() => rt), cwd, { tasks: [{ task: "hello" }] });
+    const inv = readInvocations(logFile);
+    expect(inv).toHaveLength(1);
+    expect(inv[0]!.model).toBe("prov/session-model");
+  }, 30_000);
+
+  it("an explicit task model beats the session model; config models beat the session model", async () => {
+    const cwd = mkRepo();
+    const { rt, logFile } = mkRuntime(cwd, { models: { worker: "cfg/worker-model" } });
+    rt.sessionModel = "prov/session-model";
+    await run(delegateTool(() => rt), cwd, { tasks: [{ task: "a" }, { task: "b", model: "explicit/model" }] });
+    const models = readInvocations(logFile).map((i) => i.model);
+    expect(models).toContain("explicit/model");
+    expect(models).toContain("cfg/worker-model");
+    expect(models).not.toContain("prov/session-model");
+  }, 30_000);
+
   it("reports a failing worker without throwing", async () => {
     const cwd = mkRepo();
     const { rt } = mkRuntime(cwd);

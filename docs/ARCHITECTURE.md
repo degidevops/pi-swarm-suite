@@ -20,7 +20,7 @@ core: tasks (file-per-task, lock) · mailbox (JSONL) · journal (JSONL replay) �
 
 | File | Responsibility |
 |---|---|
-| `src/index.ts` | Registers 3 tools + `/swarm` commands (status, jobs, tasks, log, steer, merge, stop, board, attach, tail, cost). At `PI_SWARM_DEPTH >= 1` registers ONLY teammate tools. |
+| `src/index.ts` | Registers 3 tools + `/swarm` commands (status, jobs, tasks, log, steer, merge, stop, board, attach, tail, cost, doctor). Injects the `<swarm_orchestration>` system-prompt section in `before_agent_start` (with live competitor detection from `selectedTools`). At `PI_SWARM_DEPTH >= 1` registers ONLY teammate tools. |
 | `src/runtime.ts` | `Runtime` — one launcher for every worker. Concurrency, ledger, budget, abort, widget. `steer()`, `abortAll()`, `stopJob()`, `ensureSteerPolling()` (cross-process steer), `agentCosts()`, `listAttachableTeams()`, `getTeamRunning()`, `getTeamWorkers()`, `getTeamJobs()`. |
 | `src/types.ts` | `SwarmConfig` (incl. `preHooks`, `postHooks`), `AgentDef`, `Tier`, `Usage`, `WorkerResult`. |
 | `src/core/child.ts` | `ChildSpec` — arg/env/binary for children; `--session-dir` when `sessionDir` is set, else `--no-session`. |
@@ -35,7 +35,9 @@ core: tasks (file-per-task, lock) · mailbox (JSONL) · journal (JSONL replay) �
 | `src/core/review.ts` | `buildReviewPrompt`, `parseVerdict` — independent reviewer. |
 | `src/core/eventlog.ts` | per-team event log (`appendLog`). |
 | `src/core/config.ts` | `parseConfig` — parses `swarm.json` including `preHooks`/`postHooks`. |
-| `src/core/agents.ts` | agent definition loading. |
+| `src/core/agents.ts` | agent definition loading: `BUILT_IN_AGENTS` (reviewer/researcher/planner/oracle/worker, zero-setup) + discovery of user (`~/.pi/agent/agents`) and project (`.pi/agents`, trusted only) files; later sources override built-ins by name. |
+| `src/core/prompt.ts` | model-visibility layer: `buildSwarmSection` (the `<swarm_orchestration>` prompt body), `detectCompetitorTools` (finds acp_delegate & friends in the active tool list), `summarizeCompetitors`, `SWARM_TOOL_NAMES`. |
+| `src/core/doctor.ts` | `/swarm doctor` report: active tools, competing delegate tools + per-package opt-out advice, agents by source, config, git, budget. |
 | `src/core/ledger.ts` | `Ledger` — tokens/cost, `perAgent` breakdown, `snapshotByAgent()`, `agentCost()`. |
 | `src/core/pool.ts` | concurrency pool. |
 | `src/core/transcript.ts` | `appendTranscript`, `readTranscript` — JSONL per task for post-mortems. |

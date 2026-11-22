@@ -160,7 +160,8 @@ export function workflowTool(getRt: (cwd: string) => Runtime): ToolDefinition<ty
     label: "Swarm: workflow",
     description:
       "Run a declarative multi-stage workflow: fan out workers over many items in parallel (optionally one git worktree per item), then reduce/verify with a single worker. Every completed step is journaled, so an interrupted run resumes without re-spending tokens (pass runId). background:true returns immediately and notifies you with the result. Best for audits, migrations, large reviews.",
-    promptSnippet: "swarm_workflow: fan-out/reduce pipeline over many items with journaled resume",
+    promptSnippet:
+      'swarm_workflow({ stages: [{ id: "audit", kind: "fanout", items: ["src/a.ts", "src/b.ts"], template: "Audit {item}" }, { id: "report", kind: "single", template: "Summarize: {results}" }] })',
     promptGuidelines: [
       "Use swarm_workflow for large fan-out (many files/modules) followed by a reduce or cold-verify stage. Fanout workers should be read-only unless the stage sets worktree:true. To resume after an interruption, call again with the same runId.",
     ],

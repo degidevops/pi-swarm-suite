@@ -1,7 +1,7 @@
 # AGENTS.md — pi-swarm-suite
 
 A single pi extension that provides three orchestration modes behind one runtime, so nothing conflicts:
-`swarm_delegate` (subagents), `swarm_team` (lead + teammates, shared task list, mailbox), `swarm_workflow` (fan-out/reduce with journaled resume). Plus `/swarm` command, one live widget, one skill.
+`swarm_delegate` (subagents), `swarm_team` (lead + teammates, shared task list, mailbox), `swarm_workflow` (fan-out/reduce with journaled resume). Plus `/swarm` command (incl. `doctor`), one live widget, one skill, five built-in agents, and a `<swarm_orchestration>` system-prompt section.
 
 ## Commands
 - `npm install` — install deps (peer: `@earendil-works/pi-coding-agent`, `typebox`)
@@ -9,13 +9,15 @@ A single pi extension that provides three orchestration modes behind one runtime
 - `npm test` — vitest (unit, real-git, and end-to-end tests against `test/fixtures/fake-pi.mjs`)
 - `npm run check` — both
 - Try it: `pi -e ./src/index.ts` (needs a configured model), or `pi install ./` for a local install
+- Diagnose without a token: `node scripts/diagnose-prompt.mjs` (headless prompt capture; `--ext none` after `pi install ./`)
+- Real-model tool-choice test: `PI_TEST_PROVIDER=… PI_TEST_MODEL=… PI_TEST_API_KEY=… node scripts/realtest-toolchoice.mjs`
 
 ## Architecture (read docs/ARCHITECTURE.md first)
 - `src/runtime.ts` — ONE `Runtime`: launches every worker (concurrency, budget, ledger, abort, widget). All modes go through `Runtime.run()`. Never spawn processes anywhere else. Also handles cross-process steer polling (`ensureSteerPolling`), per-agent costs (`agentCosts`), attach state (`listAttachableTeams`, `getTeamRunning`, `getTeamWorkers`, `getTeamJobs`).
-- `src/core/` — building blocks: `child.ts` (arg/env/binary for children), `worker.ts` (one-shot JSON worker + `Collector`), `rpc.ts` (steerable RPC worker), `tasks.ts`, `mailbox.ts`, `journal.ts`, `git.ts`, `gates.ts`, `scope.ts`, `review.ts`, `eventlog.ts`, `config.ts`, `agents.ts`, `ledger.ts`, `pool.ts`, `util.ts`, `attach.ts`, `transcript.ts`.
+- `src/core/` — building blocks: `child.ts` (arg/env/binary for children), `worker.ts` (one-shot JSON worker + `Collector`), `rpc.ts` (steerable RPC worker), `tasks.ts`, `mailbox.ts`, `journal.ts`, `git.ts`, `gates.ts`, `scope.ts`, `review.ts`, `eventlog.ts`, `config.ts`, `agents.ts` (built-ins + discovery), `prompt.ts` (system-prompt section + competitor detection), `doctor.ts` (`/swarm doctor` report), `ledger.ts`, `pool.ts`, `util.ts`, `attach.ts`, `transcript.ts`.
 - `src/child-tools.ts` — teammate-side tools (`team_message`, `team_inbox`, `team_tasks`, `team_task_request`); `src/ui.ts` — tool renderers; `src/ui-dashboard.ts` — `DashboardComponent` for `/swarm board`.
 - `src/modes/` — `delegate.ts`, `team.ts`, `workflow.ts`; each exports a tool factory taking `getRt(cwd)`.
-- `src/index.ts` — registers tools + `/swarm`. At `PI_SWARM_DEPTH >= 1` it registers ONLY the teammate tools (when `PI_SWARM_TEAM_DIR`/`PI_SWARM_MATE` are set), never orchestration tools.
+- `src/index.ts` — registers tools + `/swarm`, injects the `<swarm_orchestration>` section in `before_agent_start` (with live competitor detection from `selectedTools`), and exposes `/swarm doctor`. At `PI_SWARM_DEPTH >= 1` it registers ONLY the teammate tools (when `PI_SWARM_TEAM_DIR`/`PI_SWARM_MATE` are set), never orchestration tools.
 
 ## Invariants — do not break
 1. Tool names are `swarm_*` and the command is `swarm`. Do not register generic names like `workflow` or `Agent` (that caused collisions with other packages).
@@ -29,12 +31,14 @@ A single pi extension that provides three orchestration modes behind one runtime
 9. Headless workers must never block on UI: `RpcWorker` auto-cancels extension dialogs. Keep that.
 10. Anything that steers/aborts a worker goes through `Runtime` (`steer`, `abortAll`, `stopJob`), never directly to a process.
 11. Child tool names in `CHILD_TOOL_NAMES` (runtime.ts) must match `child-tools.ts`, or `--tools` allowlists will hide them.
+12. Model visibility is part of the product: the `<swarm_orchestration>` section, example-style `promptSnippet`s (never `name: description` — pi already prefixes the name) and the built-in agents exist so the model prefers these tools over competing delegate packages. If you change tool names, update `SWARM_TOOL_NAMES`, the section builder and `scripts/diagnose-prompt.mjs` together, and keep `test/prompt.test.ts` green.
+13. Built-in agents (reviewer/researcher/planner/oracle/worker) are the cold-start fallback only: user and project agent files must keep overriding them by name.
 
 ## Conventions
 - TypeScript, ESM, `.ts` import suffixes, strict mode. Tabs/spaces: follow existing files (2 spaces).
 - Errors in tool `execute`: `throw new Error(clear message)` for invalid input; return text for run outcomes.
 - Add a vitest test for every new pure function. Git behaviour is tested against real temp repos.
-- Keep tool descriptions and `promptGuidelines` short; they cost tokens on every request.
+- `promptSnippet`s must be single-line concrete call examples (see invariant 12); every char costs tokens on every request.
 
 ## Testing notes
 - `PI_SWARM_PI_BIN=test/fixtures/fake-pi.mjs` swaps in the scripted pi. Directives (`FAIL:`, `COST:`, `SLEEP:`, `WRITE:`, `WRITE_BAD:`, `MSG:`, `DIALOG:`) are documented at the top of that file. Extend the fake when you add protocol features, and keep it faithful to pi's documented JSON/RPC events.

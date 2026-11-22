@@ -1,6 +1,6 @@
 {
   "name": "pi-swarm-suite",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "One conflict-free swarm extension for pi: delegate (subagents), team (lead + teammates, shared task list, mailbox), and workflow (fan-out/reduce with journaled resume), with worktree isolation, quality gates and a cost ledger.",
   "type": "module",
   "license": "MIT",
@@ -48,8 +48,5 @@
     "typebox": "^1.0.0",
     "typescript": "^5.6.0",
     "vitest": "^3.2.7"
-  },
-  "dependencies": {
-    "@rollup/rollup-android-arm64": "^4.68.8"
   }
 }

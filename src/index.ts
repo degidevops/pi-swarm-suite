@@ -13,14 +13,18 @@ import { listTeams, mergeTeam, teamLog, teamStatus, teamTool } from "./modes/tea
 import { workflowTool } from "./modes/workflow.ts";
 import { assertSafeName, formatTokens, formatUsd, truncate } from "./core/util.ts";
 import { DashboardComponent } from "./ui-dashboard.ts";
+import { buildSwarmSection, detectCompetitorTools, SWARM_TOOL_NAMES } from "./core/prompt.ts";
+import { doctorReport } from "./core/doctor.ts";
 
 const WIDGET_KEY = "swarm-suite";
 const CHILD_FLAG = Symbol.for("pi-swarm-suite.child-tools");
+const SECTION_KEY = "swarm_orchestration";
 
 const HELP = [
   "/swarm status               running workers, jobs, cost",
   "/swarm jobs                 background jobs (team/workflow runs)",
   "/swarm cost | reset-cost    token/cost totals | clear the ledger",
+  "/swarm doctor               environment diagnosis (tools, agents, config, conflicts)",
   "/swarm agents               discovered agents (tier, tools)",
   "/swarm teams                teams in this project",
   "/swarm tasks <team>         shared task list incl. plans awaiting approval",
@@ -86,6 +90,10 @@ export default function swarmSuite(pi: ExtensionAPI): void {
   let rt: Runtime | undefined;
   let uiCtx: ExtensionContext | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  /** Active tools from the last before_agent_start snapshot (empty before the first turn). */
+  let activeTools: string[] = [];
+  /** Foreign delegation tools detected in the last prompt (for the prompt section and /swarm doctor). */
+  let competitorTools: string[] = [];
 
   const refreshWidget = () => {
     if (timer) return;
@@ -117,6 +125,7 @@ export default function swarmSuite(pi: ExtensionAPI): void {
     const runtime = new Runtime(ctx.cwd, config, trusted, depth);
     runtime.agents = discoverAgents(ctx.cwd, trusted);
     runtime.extPath = ownPath();
+    if (ctx.model) runtime.sessionModel = `${ctx.model.provider}/${ctx.model.id}`;
     runtime.onChange = refreshWidget;
     runtime.onJobDone = notifyJob;
     if (warnings.length) ctx.ui.notify(`swarm: ${warnings.join("; ")}`, "warning");
@@ -136,6 +145,23 @@ export default function swarmSuite(pi: ExtensionAPI): void {
     rt = build(ctx);
   });
 
+  // Teach the model the three modes, the built-in roles and — when other delegation tools
+  // (e.g. billion-context's acp_delegate) are active — to prefer the swarm tools. Tool
+  // descriptions alone lose against a competitor that injects a dedicated prompt section.
+  pi.on("before_agent_start", async (event, ctx) => {
+    // Workers should follow the lead's model even after a mid-session model switch.
+    if (rt && ctx.model) rt.sessionModel = `${ctx.model.provider}/${ctx.model.id}`;
+    const tools = event.systemPromptOptions.selectedTools ?? [];
+    activeTools = [...tools];
+    competitorTools = detectCompetitorTools(tools);
+    if (tools.some((t) => SWARM_TOOL_NAMES.has(t))) {
+      event.systemPromptOptions.sections[SECTION_KEY] = buildSwarmSection(competitorTools);
+    } else {
+      // Safety net: never leave a stale swarm section in the prompt when our tools are disabled.
+      delete event.systemPromptOptions.sections[SECTION_KEY];
+    }
+  });
+
   pi.on("session_shutdown", async () => {
     rt?.abortAll("session shutdown");
     if (timer) clearTimeout(timer);
@@ -151,9 +177,9 @@ export default function swarmSuite(pi: ExtensionAPI): void {
   pi.registerTool(workflowTool(getRt));
 
   pi.registerCommand("swarm", {
-    description: "Swarm suite: status | jobs | cost | agents | teams | tasks | log | steer | merge | stop",
+    description: "Swarm suite: status | jobs | cost | doctor | agents | teams | tasks | log | steer | merge | stop",
     getArgumentCompletions: (prefix) => {
-      const subs = ["status", "jobs", "cost", "reset-cost", "agents", "teams", "tasks", "log", "steer", "merge", "board", "tail", "attach", "stop", "help"];
+      const subs = ["status", "jobs", "cost", "reset-cost", "doctor", "agents", "teams", "tasks", "log", "steer", "merge", "board", "tail", "attach", "stop", "help"];
       const hits = subs.filter((s) => s.startsWith(prefix.trim()));
       return hits.length ? hits.map((s) => ({ value: s, label: s })) : null;
     },
@@ -189,6 +215,9 @@ export default function swarmSuite(pi: ExtensionAPI): void {
           case "reset-cost":
             runtime.ledger.reset();
             say("swarm: ledger reset");
+            break;
+          case "doctor":
+            say(doctorReport({ runtime, extPath: ownPath(), activeTools, competitorTools }));
             break;
           case "agents": {
             const list = [...runtime.agents.values()].map((a) => `${a.name} (${a.source}${a.tier ? `, ${a.tier}` : ""}) — ${a.description}`);

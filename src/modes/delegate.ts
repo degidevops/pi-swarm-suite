@@ -32,10 +32,12 @@ export function delegateTool(getRt: (cwd: string) => Runtime): ToolDefinition<ty
     name: "swarm_delegate",
     label: "Swarm: delegate",
     description:
-      "Delegate independent tasks to isolated worker agents (separate pi processes with their own context). Parallel by default; set chain=true for a sequential pipeline. Use for focused, self-contained work: research, review, tests, small isolated edits.",
-    promptSnippet: "swarm_delegate: run independent tasks in parallel in isolated worker agents",
+      "Delegate tasks to isolated subagent workers (separate pi processes with their own context) and get their results back. One call runs many tasks in parallel; set chain=true for a sequential pipeline. Built-in agents work with no setup: reviewer (read-only code review), researcher (read-only investigation), planner, oracle (advice), worker (writes code). Use for focused, self-contained work: review, research, tests, small isolated edits.",
+    promptSnippet:
+      'swarm_delegate({ tasks: [{ task: "Review src/auth.ts for race conditions", agent: "reviewer" }, { task: "…", agent: "worker", worktree: true }] })',
     promptGuidelines: [
       "Use swarm_delegate for independent, self-contained tasks; use swarm_team when tasks depend on each other or modules must coordinate; use swarm_workflow for large fan-out with resume.",
+      "Route by task kind: review/audit → agent reviewer (read-only, ends with VERDICT: PASS|FAIL), codebase questions → researcher, planning → planner, advice → oracle, changes → worker (worktree: true when writing).",
       "Give each swarm_delegate task full context: workers cannot see this conversation. Never let two parallel tasks edit the same files; set worktree=true for tasks that write.",
     ],
     parameters: DelegateParams,

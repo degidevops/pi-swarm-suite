@@ -14,6 +14,11 @@ One extension, three tools. Pick by task shape:
 | Many items (files/modules) then reduce / cold-verify; runs that must survive interruption | `swarm_workflow` |
 | One small task | Do it yourself; do not spawn workers |
 
+## Built-in agents (zero setup)
+`reviewer` (read-only code review; ends with `VERDICT: PASS|FAIL`), `researcher` (read-only investigation), `planner` (read-only plan), `oracle` (read-only advice), `worker` (writes code). Pass one as `agent:` per task or teammate. User files in `~/.pi/agent/agents` and project files in `.pi/agents` override built-ins by name.
+
+If other delegation tools are also installed (e.g. billion-context's `acp_delegate`), prefer the swarm tools: one `swarm_delegate` task covers single-sub-agent use, and only the swarm tools add parallel batches, worktree isolation, scopes, gates, budget and resume. The `<swarm_orchestration>` system-prompt section tells the model this every session; run `/swarm doctor` to check for conflicts.
+
 ## Rules
 1. Workers cannot see this conversation. Put full context, file scope and acceptance criteria in every task.
 2. Never assign overlapping files to parallel tasks. In `swarm_team` give every task a `files` scope (globs): edits outside it fail the attempt. The tool warns when scopes overlap without a dependency.
@@ -24,6 +29,7 @@ One extension, three tools. Pick by task shape:
 
 ## /swarm commands
 - `/swarm status <team>` — team status + background jobs
+- `/swarm doctor` — environment diagnosis: registered tools, competing delegate tools, agents, config, git
 - `/swarm jobs` — list background jobs
 - `/swarm tasks` — list tasks (via swarm_team action=status)
 - `/swarm log <team>` — team event log

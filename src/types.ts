@@ -43,7 +43,8 @@ export interface AgentDef {
   systemPrompt: string;
   /** Model tier: lets config.models route this agent to a strong/mid/cheap model. */
   tier?: Tier;
-  source: "user" | "project";
+  /** Where the definition came from. Built-ins ship with the package; user/project files override them. */
+  source: "builtin" | "user" | "project";
   filePath: string;
 }
 

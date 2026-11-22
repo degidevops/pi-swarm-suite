@@ -497,8 +497,9 @@ export function teamTool(getRt: (cwd: string) => Runtime): ToolDefinition<typeof
     name: "swarm_team",
     label: "Swarm: team",
     description:
-      "Coordinate a team of teammates over a shared task list: dependencies, per-task git worktrees, file-ownership scopes, optional plan approval, quality gates, independent review, live teammate messaging. Flow: create → run → (approve plans) → review → human runs /swarm merge. Use when tasks depend on each other or modules must be built in order.",
-    promptSnippet: "swarm_team: lead + teammates over a shared task list (deps, worktrees, scopes, plan approval, gates, review)",
+      "Coordinate a team of teammates over a shared task list: dependencies, per-task git worktrees, file-ownership scopes, optional plan approval, quality gates, independent review, live teammate messaging. Teammates can use the built-in agents (reviewer, researcher, planner, oracle, worker) or your own agent files. Flow: create → run → (approve plans) → review → human runs /swarm merge. Use when tasks depend on each other or modules must be built in order.",
+    promptSnippet:
+      'swarm_team({ action: "create", name: "feature-x", teammates: [{ name: "impl", agent: "worker" }], tasks: [{ subject: "…", description: "…", files: ["src/x/**"] }] })',
     promptGuidelines: [
       "With swarm_team, split work along module boundaries, declare deps, and give each task a `files` scope so teammates cannot collide. Use background:true for long runs and keep working; you are notified when it settles. Agents never merge: tell the user to run /swarm merge <team> after review.",
     ],

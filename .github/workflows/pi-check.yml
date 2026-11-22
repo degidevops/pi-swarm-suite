@@ -1,0 +1,92 @@
+name: pi-check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  unit:
+    # Typecheck + unit/e2e tests against the scripted fake pi — no API token needed.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Typecheck + tests
+        run: npm run check
+
+  pi-headless:
+    # Load the extension inside the REAL pi harness (headless) and verify what the
+    # model would see: tool registrations, prompt snippets, the <swarm_orchestration>
+    # section, and coexistence with billion-context. Still no API token needed.
+    needs: unit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Install pi
+        run: npm install -g @earendil-works/pi-coding-agent@^1.6.0
+
+      - name: Diagnosis — extension loaded via -e (no competitor)
+        run: node scripts/diagnose-prompt.mjs
+
+      - name: Diagnosis — installed as a package (pi install ./)
+        run: |
+          pi install ./
+          node scripts/diagnose-prompt.mjs --ext none
+
+      - name: Diagnosis — coexistence with billion-context (the reported bug)
+        run: |
+          pi install npm:billion-context
+          node scripts/diagnose-prompt.mjs --ext none
+          pi remove npm:billion-context
+
+      - name: Doctor — verify /swarm doctor logic (unit-level, still headless)
+        run: npx vitest --run test/prompt.test.ts
+
+  pi-realtest:
+    # Real-model tool-choice test on the actual battlefield (billion-context installed
+    # alongside). Requires repo secrets — the job skips gracefully when they are absent.
+    # Configure in repo settings:
+    #   Secrets: PI_TEST_API_KEY
+    #   Vars:    PI_TEST_PROVIDER (e.g. openrouter), PI_TEST_MODEL (e.g. openrouter/auto)
+    needs: pi-headless
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Install pi
+        run: npm install -g @earendil-works/pi-coding-agent@^1.6.0
+
+      - name: Real-model tool-choice test (skips without PI_TEST_API_KEY)
+        env:
+          PI_TEST_API_KEY: ${{ secrets.PI_TEST_API_KEY }}
+          PI_TEST_PROVIDER: ${{ vars.PI_TEST_PROVIDER }}
+          PI_TEST_MODEL: ${{ vars.PI_TEST_MODEL }}
+        run: node scripts/realtest-toolchoice.mjs

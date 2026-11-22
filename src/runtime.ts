@@ -80,6 +80,8 @@ export class Runtime {
   agents = new Map<string, AgentDef>();
   /** Extension file team children load so they get the messaging tools. */
   extPath?: string;
+  /** Model of the parent session ("provider/id"); workers fall back to it when nothing else is configured. */
+  sessionModel?: string;
   onChange: () => void = () => undefined;
   onJobDone: (job: Job) => void = () => undefined;
   private shutdown = new AbortController();
@@ -114,7 +116,10 @@ export class Runtime {
     const a = this.agents.get(name);
     if (!a) {
       const names = [...this.agents.keys()].join(", ") || "(none found)";
-      throw new Error(`Unknown agent "${name}". Available agents: ${names}.`);
+      throw new Error(
+        `Unknown agent "${name}". Available agents: ${names}. ` +
+          `Built-ins (reviewer, researcher, planner, oracle, worker) always work; add .md files to ~/.pi/agent/agents or .pi/agents for custom ones.`,
+      );
     }
     return a;
   }
@@ -163,7 +168,7 @@ export class Runtime {
 
     const baseTools = opts.tools ?? opts.agent?.tools ?? this.config.workerTools;
     const tier = opts.tier ?? opts.agent?.tier ?? pickTier(baseTools);
-    const model = opts.model ?? opts.agent?.model ?? this.config.models[tier] ?? this.config.models.worker;
+    const model = opts.model ?? opts.agent?.model ?? this.config.models[tier] ?? this.config.models.worker ?? this.sessionModel;
     const tools = baseTools && opts.team ? [...new Set([...baseTools, ...CHILD_TOOL_NAMES])] : baseTools;
 
     const wopts = {
