@@ -11,14 +11,27 @@
  *   4. other delegation tools present in the same session (e.g. billion-context's
  *      acp_delegate) are detected, and the preference paragraph is active
  *
+ * The run is hermetic: pi gets an isolated config dir (PI_CODING_AGENT_DIR) that
+ * contains only a mock provider definition, so no real API key and no pre-existing
+ * ~/.pi state are required — this is what makes it work on a fresh CI runner.
+ * Packages requested via --with (and the repo itself in --ext none mode) are
+ * installed into that same isolated dir and thrown away afterwards.
+ *
  * Usage:
- *   node scripts/diagnose-prompt.mjs [--ext ./src/index.ts] [--cwd <dir>] [--timeout 45000]
+ *   node scripts/diagnose-prompt.mjs [--ext ./src/index.ts|none] [--with npm:billion-context]
+ *                                    [--cwd <dir>] [--timeout 45000] [--keep-config]
+ *
+ *   --ext none      test the package as installed via `pi install ./` (the script installs it)
+ *   --with <pkg>    also install a competitor package into the isolated config dir
+ *   --keep-config   use the machine's real pi config dir; the script then installs nothing
+ *                   (caller-managed installs; useful for local debugging with real configs)
  *
  * Exit code 0 = all hard checks passed, 1 = something is broken.
  */
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -29,8 +42,10 @@ const flag = (name, def) => {
   return i >= 0 ? args[i + 1] : def;
 };
 const ext = flag("--ext", path.join(repoRoot, "src", "index.ts"));
+const withPkg = flag("--with", undefined);
 const cwd = flag("--cwd", repoRoot);
 const timeoutMs = Number(flag("--timeout", "45000"));
+const keepConfig = args.includes("--keep-config");
 
 // "--ext none" tests the package as installed via `pi install` (no -e flag).
 const extArgs = ext === "none" ? [] : ["-e", ext];
@@ -39,11 +54,62 @@ if (ext !== "none" && !fs.existsSync(ext)) {
   process.exit(1);
 }
 
-const child = spawn(
-  "pi",
-  ["--mode", "json", "--no-session", "--offline", ...extArgs, "-p", "diagnose"],
-  { cwd, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, PI_OFFLINE: "1" } },
-);
+/**
+ * Mock chat provider definition. pi refuses to start without a model whose provider
+ * has credentials; the system prompt is emitted before any LLM call and we kill pi
+ * at that point, so the endpoint is never contacted (port 9 = discard, connection
+ * refused instantly even if pi got further than expected).
+ */
+const MOCK_MODELS = `${JSON.stringify(
+  {
+    $schema: "https://pi.dev/schemas/models.schema.json",
+    providers: {
+      mock: {
+        baseUrl: "http://127.0.0.1:9/v1",
+        api: "openai-completions",
+        apiKey: "mock",
+        models: [{ id: "mock-model", contextWindow: 128000, maxTokens: 8192 }],
+      },
+    },
+  },
+  null,
+  2,
+)}\n`;
+
+let cfgDir; // isolated pi config dir; removed on success, kept for inspection on failure
+const childEnv = { ...process.env, PI_OFFLINE: "1" };
+
+if (!keepConfig) {
+  cfgDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-diagnose-"));
+  fs.writeFileSync(path.join(cfgDir, "models.json"), MOCK_MODELS);
+  childEnv.PI_CODING_AGENT_DIR = cfgDir;
+
+  const piInstall = (what, label) => {
+    console.log(`diagnose: pi install ${what} (isolated config dir)…`);
+    const r = spawnSync("pi", ["install", what], {
+      cwd: repoRoot,
+      env: { ...process.env, PI_CODING_AGENT_DIR: cfgDir },
+      encoding: "utf8",
+      timeout: 300_000,
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    if (r.status !== 0) {
+      console.error(`diagnose: ${label} failed:\n${(r.stderr || r.stdout || "(no output)").trim()}`);
+      fs.rmSync(cfgDir, { recursive: true, force: true });
+      process.exit(1);
+    }
+  };
+  if (ext === "none") piInstall("./", "pi install ./");
+  if (withPkg) piInstall(withPkg, `pi install ${withPkg}`);
+} else if (ext === "none" || withPkg) {
+  console.error("diagnose: --keep-config installs nothing — run `pi install` yourself first.");
+}
+
+const child = spawn("pi", ["--mode", "json", "--no-session", "--offline", ...extArgs, "-p", "diagnose"], {
+  cwd,
+  stdio: ["ignore", "pipe", "pipe"],
+  env: childEnv,
+});
 
 let sections = null;
 let sawTools = "";
@@ -52,6 +118,15 @@ let stderr = "";
 let reported = false;
 
 const timer = setTimeout(() => finish(1, "timed out waiting for the system prompt"), timeoutMs);
+
+function cleanup() {
+  if (!cfgDir) return;
+  try {
+    fs.rmSync(cfgDir, { recursive: true, force: true });
+  } catch {
+    /* best effort */
+  }
+}
 
 function report(code, reason) {
   if (reported) return;
@@ -66,6 +141,7 @@ function report(code, reason) {
     say("");
     say("pi stderr (tail):");
     say(stderr.split("\n").slice(-12).join("\n") || "(empty)");
+    if (cfgDir) say(`isolated config dir kept for inspection: ${cfgDir}`);
     console.log(lines.join("\n"));
     process.exit(1);
   }
@@ -123,11 +199,13 @@ function report(code, reason) {
   if (hard.length) {
     say("FAILED checks:");
     for (const h of hard) say(`  - ${h}`);
+    if (cfgDir) say(`isolated config dir kept for inspection: ${cfgDir}`);
     console.log(lines.join("\n"));
     process.exit(1);
   }
   say("all checks passed");
   console.log(lines.join("\n"));
+  cleanup();
 }
 
 function finish(code, reason) {

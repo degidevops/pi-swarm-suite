@@ -18,11 +18,15 @@
  *   PI_TEST_NO_COMPETITOR=1   skip installing billion-context (tests swarm alone)
  *   PI_TEST_TIMEOUT_SECS      default 420
  *   PI_TEST_PROMPT            override the prompt
+ *   PI_TEST_KEEP_CONFIG=1     use the machine's real pi config dir (installs the
+ *                             competitor there instead of an isolated throwaway dir)
  *
  * Usage: node scripts/realtest-toolchoice.mjs
  */
-import { spawn, execSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -46,20 +50,32 @@ if (!API_KEY || !PROVIDER || !MODEL) {
 const SWARM = new Set(["swarm_delegate", "swarm_team", "swarm_workflow"]);
 const FOREIGN_DELEGATE = /(delegate|subagent|dispatch|spawn_?agent|crew)/i;
 
-function sh(cmd) {
-  return execSync(cmd, { cwd: repoRoot, stdio: "pipe", encoding: "utf8" }).trim();
-}
+// Hermetic by default: the competitor is installed into an isolated throwaway pi
+// config dir (PI_CODING_AGENT_DIR) so the machine's real config is never touched.
+let cfgDir;
+const childEnv = { ...process.env };
 
 // Install the competitor so the test reflects the real conflict (unless told otherwise).
 if (!NO_COMPETITOR) {
-  console.log("realtest: installing billion-context (the competitor)…");
-  try {
-    sh("pi install npm:billion-context");
-    console.log("realtest: billion-context installed");
-  } catch (e) {
-    console.error(`realtest: could not install billion-context: ${e.message}`);
+  if (process.env.PI_TEST_KEEP_CONFIG !== "1") {
+    cfgDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-realtest-"));
+    childEnv.PI_CODING_AGENT_DIR = cfgDir;
+  }
+  const installEnv = { ...process.env, ...(cfgDir ? { PI_CODING_AGENT_DIR: cfgDir } : {}) };
+  console.log(`realtest: installing billion-context (the competitor)${cfgDir ? " (isolated config dir)" : ""}…`);
+  const r = spawnSync("pi", ["install", "npm:billion-context"], {
+    cwd: repoRoot,
+    env: installEnv,
+    encoding: "utf8",
+    timeout: 300_000,
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  if (r.status !== 0) {
+    console.error(`realtest: could not install billion-context:\n${(r.stderr || r.stdout || "(no output)").trim()}`);
+    if (cfgDir) fs.rmSync(cfgDir, { recursive: true, force: true });
     process.exit(1);
   }
+  console.log("realtest: billion-context installed");
 }
 
 const args = [
@@ -74,7 +90,7 @@ const args = [
 ];
 
 console.log(`realtest: pi ${PROVIDER}/${MODEL} with prompt: ${PROMPT.slice(0, 90)}…`);
-const child = spawn("pi", args, { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] });
+const child = spawn("pi", args, { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"], env: childEnv });
 
 const toolCalls = [];
 let sawText = "";
@@ -92,6 +108,13 @@ function finish(reason) {
     child.kill("SIGKILL");
   } catch {
     /* already gone */
+  }
+  if (cfgDir) {
+    try {
+      fs.rmSync(cfgDir, { recursive: true, force: true });
+    } catch {
+      /* best effort */
+    }
   }
   report(reason);
 }
