@@ -60,6 +60,13 @@ You do NOT have to uninstall billion-context to use pi-swarm-suite: its compress
 
 ## Install
 ```bash
+# straight from GitHub (public repo; auto-updates to main on every pi start / reload):
+pi install https://github.com/degidevops/pi-swarm-suite
+# or pin a ref:  pi install git:github.com/degidevops/pi-swarm-suite@main
+# or per-project only:
+pi install https://github.com/degidevops/pi-swarm-suite --local
+
+# from a source checkout (development / release tarball):
 tar xzf pi-swarm-suite.tar.gz && cd pi-swarm-suite
 npm install
 npm run check                 # typecheck + tests (uses a scripted fake pi)
@@ -74,14 +81,20 @@ Verified against `nvidia/nemotron-3.5-super-vl-120b-a12b` via `pi install ./`:
 - `swarm_team action=run` executes tasks in isolated worktrees with scope enforcement
 - Git worktrees, commits, and merges work end-to-end
 
-## Set up
+## Optional setup — `pi install` is enough
+
+Out of the box, with no other steps: five built-in agents (`reviewer`, `researcher`, `planner`,
+`oracle`, `worker`) cover the common delegation roles, and sane defaults apply (concurrency 4,
+worktrees on, retries 2). Nothing else to configure.
+
+The block below is **customization only** — copy it when you want your own agent definitions or
+non-default behaviour; both override the built-ins by name:
 ```bash
-# built-in agents (reviewer, researcher, planner, oracle, worker) need no setup
-mkdir -p ~/.pi/agent/agents && cp examples/agents/*.md ~/.pi/agent/agents/   # optional: your own agents
-cp examples/swarm.json ~/.pi/agent/swarm.json     # global; or <repo>/.pi/swarm.json (trusted projects only)
+mkdir -p ~/.pi/agent/agents && cp examples/agents/*.md ~/.pi/agent/agents/   # your own agents (override built-ins)
+cp examples/swarm.json ~/.pi/agent/swarm.json     # global config; or <repo>/.pi/swarm.json (trusted projects only)
 ```
 Diagnose your environment any time with `/swarm doctor` (inside pi) or `node scripts/diagnose-prompt.mjs` (headless, no token).
-`swarm.json`: `maxConcurrency` (cap 16), `budgetUsd`, `worktrees`, `gates` (shell commands that must pass), `maxAttempts`, `reviewer` (agent that reviews each task's diff), `models.{lead,worker,cheap}`, `workerTools`, `preHooks`, `postHooks`. Agent files take `name`, `description`, `tools`, `model`, `tier: lead|worker|cheap`.
+`swarm.json` (all keys optional): `maxConcurrency` (cap 16), `budgetUsd`, `worktrees`, `gates` (shell commands that must pass), `maxAttempts`, `reviewer` (agent that reviews each task's diff), `models.{lead,worker,cheap}`, `workerTools`, `preHooks`, `postHooks`. Agent files take `name`, `description`, `tools`, `model`, `tier: lead|worker|cheap`.
 
 ## Typical session
 ```
