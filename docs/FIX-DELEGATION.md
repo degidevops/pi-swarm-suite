@@ -62,9 +62,14 @@ dependency: `npm install` / `npm ci` failed outright on linux/x64 and macOS
 - Real-pi headless (`scripts/diagnose-prompt.mjs`, no API token): with billion-context
   installed, the prompt now carries `<swarm_orchestration>` (with the preference
   paragraph) *before* `<acp_delegate>`, and all three swarm tools are listed with example
-  snippets. Same result via the `pi install ./` path (`--ext none`).
+  snippets. Same result via the `pi install ./` path (`--ext none`). The script is
+  hermetic: it provisions a throwaway pi config dir (via `PI_CODING_AGENT_DIR`) with a
+  mock provider — pi needs *a* credentialed model to start, but the system prompt is
+  emitted before any LLM call, so no real key and no pre-existing `~/.pi` state are
+  needed. Verified green on a fresh GitHub Actions runner (job `pi-headless`).
 - Real-model tool-choice battle: `scripts/realtest-toolchoice.mjs` (needs an API key;
-  runs in CI job `pi-realtest`, skips gracefully without one).
+  runs in CI job `pi-realtest`, skips gracefully without one). The competitor is
+  installed into an isolated config dir too, so the runner's real config is untouched.
 
 ## Does real testing need an API token?
 
