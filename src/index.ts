@@ -191,7 +191,8 @@ export default function swarmSuite(pi: ExtensionAPI): void {
       try {
         switch (sub) {
           case "status": {
-            const lines = runtime.widgetLines();
+            // Full view: includes recently finished workers (the live widget hides them).
+            const lines = runtime.statusLines();
             say(lines.length ? lines.join("\n") : "swarm: idle");
             break;
           }

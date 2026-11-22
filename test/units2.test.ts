@@ -5,9 +5,9 @@ import * as path from "node:path";
 import { globToRegExp, outsideScope, scopesOverlap } from "../src/core/scope.ts";
 import { buildReviewPrompt, parseVerdict } from "../src/core/review.ts";
 import { appendLog, formatLog, readLog } from "../src/core/eventlog.ts";
-import { parseConfig } from "../src/core/config.ts";
+import { parseConfig, DEFAULT_CONFIG } from "../src/core/config.ts";
 import { getPiInvocation } from "../src/core/child.ts";
-import { pickTier } from "../src/runtime.ts";
+import { pickTier, Runtime, type WorkerInfo } from "../src/runtime.ts";
 import { registerChildTools } from "../src/child-tools.ts";
 import { Mailbox } from "../src/core/mailbox.ts";
 import { TaskStore } from "../src/core/tasks.ts";
@@ -252,5 +252,54 @@ describe("Cross-process attach (ROADMAP #7)", () => {
     removeTeamRunning(dir, "alpha");
     expect(hasRunningTeams(dir)).toBe(false);
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("Live widget visibility", () => {
+  const mkRt = () => new Runtime(process.cwd(), { ...DEFAULT_CONFIG, models: {} }, true, 0);
+  const w = (id: number, status: WorkerInfo["status"], last: string, startedAt = Date.now() - 10_000, endedAt?: number): WorkerInfo => ({
+    id, label: `web-team/agent${id}#${id}`, status, startedAt, endedAt, last, steerable: status === "running",
+  });
+
+  it("hides finished workers: whole widget collapses once the swarm settles", () => {
+    const rt = mkRt();
+    rt.workers.set(1, w(1, "ok", "Task complete. Summary:"));
+    rt.workers.set(2, w(2, "failed", "tool: read, bash", Date.now() - 76_000));
+    expect(rt.widgetLines()).toEqual([]);
+  });
+
+  it("hides entirely even when prune() retains finished workers", () => {
+    const rt = mkRt();
+    for (let i = 1; i <= 4; i++) rt.workers.set(i, w(i, "ok", `result ${i}`, Date.now() - 60_000, Date.now() - 1000 * i));
+    expect(rt.workers.size).toBe(4); // retained for /swarm status and /swarm board
+    expect(rt.widgetLines()).toEqual([]);
+  });
+
+  it("shows only running workers while the swarm is active", () => {
+    const rt = mkRt();
+    rt.workers.set(1, w(1, "ok", "done", Date.now() - 58_000));
+    rt.workers.set(2, w(2, "running", "tool: read, bash"));
+    const lines = rt.widgetLines();
+    expect(lines[0]).toContain("1 running");
+    expect(lines.some((l) => l.startsWith("● "))).toBe(true);
+    expect(lines.join("\n")).not.toContain("✓");
+    expect(lines.join("\n")).not.toContain("✗");
+  });
+
+  it("stays visible while a background job runs even when no worker is running", () => {
+    const rt = mkRt();
+    rt.jobs.set("job-1", { id: "job-1", kind: "review", name: "review:x", status: "running", startedAt: Date.now() - 5000, controller: new AbortController() });
+    const lines = rt.widgetLines();
+    expect(lines[0]).toContain("0 running");
+    expect(lines[0]).toContain("1 bg job");
+  });
+
+  it("statusLines (for /swarm status) still lists recently finished workers", () => {
+    const rt = mkRt();
+    rt.workers.set(1, w(1, "ok", "Task complete."));
+    const lines = rt.statusLines();
+    expect(lines[0]).toContain("0 running");
+    expect(lines.join("\n")).toContain("✓");
+    expect(lines.join("\n")).toContain("web-team/agent1#1");
   });
 });

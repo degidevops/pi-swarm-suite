@@ -21,7 +21,7 @@ core: tasks (file-per-task, lock) · mailbox (JSONL) · journal (JSONL replay) �
 | File | Responsibility |
 |---|---|
 | `src/index.ts` | Registers 3 tools + `/swarm` commands (status, jobs, tasks, log, steer, merge, stop, board, attach, tail, cost, doctor). Injects the `<swarm_orchestration>` system-prompt section in `before_agent_start` (with live competitor detection from `selectedTools`). At `PI_SWARM_DEPTH >= 1` registers ONLY teammate tools. |
-| `src/runtime.ts` | `Runtime` — one launcher for every worker. Concurrency, ledger, budget, abort, widget. `steer()`, `abortAll()`, `stopJob()`, `ensureSteerPolling()` (cross-process steer), `agentCosts()`, `listAttachableTeams()`, `getTeamRunning()`, `getTeamWorkers()`, `getTeamJobs()`. |
+| `src/runtime.ts` | `Runtime` — one launcher for every worker. Concurrency, ledger, budget, abort, widget. `steer()`, `abortAll()`, `stopJob()`, `ensureSteerPolling()` (cross-process steer), `agentCosts()`, `listAttachableTeams()`, `getTeamRunning()`, `getTeamWorkers()`, `getTeamJobs()`. The live widget (`widgetLines()`) shows running workers/jobs only and collapses to nothing once the swarm settles; `statusLines()` (for `/swarm status`) keeps recently finished rows for inspection. |
 | `src/types.ts` | `SwarmConfig` (incl. `preHooks`, `postHooks`), `AgentDef`, `Tier`, `Usage`, `WorkerResult`. |
 | `src/core/child.ts` | `ChildSpec` — arg/env/binary for children; `--session-dir` when `sessionDir` is set, else `--no-session`. |
 | `src/core/worker.ts` | one-shot JSON worker + `Collector`. `WorkerOptions.sessionDir`. |

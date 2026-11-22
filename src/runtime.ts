@@ -330,23 +330,46 @@ export class Runtime {
     return out;
   }
 
-  /** Lines for the single live widget (empty array = hide). */
-  widgetLines(): string[] {
-    const jobs = this.runningJobs();
-    if (this.workers.size === 0 && jobs.length === 0) return [];
+  /** Header lines shared by the live widget and `/swarm status`. */
+  private headerLines(runningCount: number, jobCount: number): string[] {
     const u = this.ledger.snapshot();
     const budget = this.ledger.budgetUsd !== undefined ? ` / ${formatUsd(this.ledger.budgetUsd)}` : "";
-    const jobTxt = jobs.length ? ` · ${jobs.length} bg job${jobs.length > 1 ? "s" : ""}` : "";
-    const lines = [`swarm  ${this.running()} running${jobTxt} · ${formatUsd(u.cost)}${budget} · ↑${formatTokens(u.input)} ↓${formatTokens(u.output)}`];
+    const jobTxt = jobCount ? ` · ${jobCount} bg job${jobCount > 1 ? "s" : ""}` : "";
+    const lines = [`swarm  ${runningCount} running${jobTxt} · ${formatUsd(u.cost)}${budget} · ↑${formatTokens(u.input)} ↓${formatTokens(u.output)}`];
     const costs = this.agentCosts();
     if (Object.keys(costs).length > 1) {
       lines.push(`  by agent: ${Object.entries(costs).map(([a, c]) => `${a}=${formatUsd(c)}`).join("  ")}`);
     }
-    const icon = { running: "●", ok: "✓", failed: "✗", aborted: "◌" } as const;
-    for (const w of [...this.workers.values()].slice(-8)) {
-      const secs = Math.round(((w.endedAt ?? Date.now()) - w.startedAt) / 1000);
-      lines.push(`${icon[w.status]} ${w.label}${w.steerable ? " ⇄" : ""} ${secs}s  ${w.last}`);
-    }
     return lines;
+  }
+
+  private workerRows(list: WorkerInfo[]): string[] {
+    const icon = { running: "●", ok: "✓", failed: "✗", aborted: "◌" } as const;
+    return list.map((w) => {
+      const secs = Math.round(((w.endedAt ?? Date.now()) - w.startedAt) / 1000);
+      return `${icon[w.status]} ${w.label}${w.steerable ? " ⇄" : ""} ${secs}s  ${w.last}`;
+    });
+  }
+
+  /**
+   * Lines for the single live widget: live activity only — running workers and
+   * running background jobs. Finished workers are dropped immediately so the
+   * widget collapses to nothing once the swarm settles; their outcome has
+   * already reached the conversation through the delegate tool result, and the
+   * recent history stays inspectable via `/swarm status` and `/swarm board`.
+   */
+  widgetLines(): string[] {
+    const jobs = this.runningJobs();
+    const running = [...this.workers.values()].filter((w) => w.status === "running");
+    if (running.length === 0 && jobs.length === 0) return [];
+    return [...this.headerLines(running.length, jobs.length), ...this.workerRows(running.slice(-8))];
+  }
+
+  /** Full status lines for the explicit `/swarm status` command: activity header plus the last workers, including recently finished ones. */
+  statusLines(): string[] {
+    const jobs = this.runningJobs();
+    const all = [...this.workers.values()];
+    const running = all.filter((w) => w.status === "running").length;
+    return [...this.headerLines(running, jobs.length), ...this.workerRows(all.slice(-8))];
   }
 }
