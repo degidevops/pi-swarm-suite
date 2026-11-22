@@ -1,0 +1,55 @@
+{
+  "name": "pi-swarm-suite",
+  "version": "0.2.0",
+  "description": "One conflict-free swarm extension for pi: delegate (subagents), team (lead + teammates, shared task list, mailbox), and workflow (fan-out/reduce with journaled resume), with worktree isolation, quality gates and a cost ledger.",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "swarm",
+    "subagents",
+    "agent-teams"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ],
+    "skills": [
+      "./skills"
+    ]
+  },
+  "files": [
+    "src",
+    "skills",
+    "examples",
+    "docs",
+    "test",
+    "README.md",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "LICENSE",
+    "NOTICE.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest --run",
+    "check": "npm run typecheck && npm run test"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=1.4.0",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^1.6.0",
+    "@earendil-works/pi-tui": "*",
+    "@types/node": "^22.0.0",
+    "typebox": "^1.0.0",
+    "typescript": "^5.6.0",
+    "vitest": "^3.2.7"
+  },
+  "dependencies": {
+    "@rollup/rollup-android-arm64": "^4.68.8"
+  }
+}

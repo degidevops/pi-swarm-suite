@@ -1,0 +1,19 @@
+{
+  "maxConcurrency": 4,
+  "budgetUsd": 20,
+  "worktrees": true,
+  "maxAttempts": 2,
+  "gates": [
+    "cargo fmt --check",
+    "cargo clippy --all-targets -- -D warnings",
+    "cargo nextest run",
+    "pnpm -r exec tsc --noEmit",
+    "pnpm -r test"
+  ],
+  "models": {
+    "lead": "provider/strong-model",
+    "worker": "provider/mid-model",
+    "cheap": "provider/fast-model"
+  },
+  "reviewer": "reviewer"
+}

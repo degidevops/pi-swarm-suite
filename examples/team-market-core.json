@@ -1,0 +1,16 @@
+{
+  "action": "create",
+  "name": "market-core",
+  "teammates": [
+    { "name": "schema-dev", "agent": "architect" },
+    { "name": "rust-1", "agent": "rust-dev" },
+    { "name": "rust-2", "agent": "rust-dev" },
+    { "name": "web-1", "agent": "ts-dev" }
+  ],
+  "tasks": [
+    { "subject": "Tick/Trade/Book schema", "description": "Define wire types in crates/schema and generate TS types. Acceptance: cargo test -p schema; ts types compile.", "files": ["crates/schema/**", "web/client/src/generated/**"], "plan": true },
+    { "subject": "Exchange feed + normalisation", "description": "Implement WS connector and tick normalisation. No allocation in the hot path.", "files": ["crates/feed/**"], "deps": ["1"] },
+    { "subject": "Footprint/volume-profile aggregation", "description": "Implement aggregation with criterion benches.", "files": ["crates/aggregate/**"], "deps": ["1"] },
+    { "subject": "Chart engine skeleton", "description": "Canvas/WebGL renderer reading the generated types.", "files": ["web/chart-engine/**"], "deps": ["1"] }
+  ]
+}

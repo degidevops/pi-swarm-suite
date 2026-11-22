@@ -1,0 +1,26 @@
+{
+  "input": "Trading platform; focus on correctness and hot-path allocations.",
+  "stages": [
+    {
+      "id": "scan",
+      "kind": "fanout",
+      "agent": "reviewer",
+      "items": ["crates/feed", "crates/aggregate", "crates/indicators", "web/chart-engine"],
+      "template": "Audit {item} (context: {input}). List concrete issues with file:line and severity."
+    },
+    {
+      "id": "reduce",
+      "kind": "single",
+      "from": "scan",
+      "agent": "architect",
+      "template": "Merge these per-module audits into one prioritized plan, deduplicated:\n\n{results}"
+    },
+    {
+      "id": "verify",
+      "kind": "single",
+      "from": "reduce",
+      "agent": "reviewer",
+      "template": "Cold-check this plan for claims that are unsupported or wrong; list corrections:\n\n{results}"
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+node_modules/
+.pi/swarm/
+*.tgz
+*.tar.gz
