@@ -1,5 +1,11 @@
 # Fix report: why the model chose `acp_delegate` over the swarm tools
 
+> **Update (custom roles):** the built-in agents described below were a *cold-start* measure. Since the
+> `customRolesOnly` change they are examples only: the lead builds each project's roles with `swarm_agent`
+> (see [CUSTOM-AGENTS.md](CUSTOM-AGENTS.md)). The model-visibility fixes (prompt section, example snippets,
+> competitor detection) still apply; where this report says "built-in roles work with zero setup", that now
+> holds only with `"customRolesOnly": false`. Kept below as written for history.
+
 **Symptom.** With pi-swarm-suite and billion-context both installed, delegation requests were
 served by billion-context's `acp_delegate` instead of `swarm_delegate` / `swarm_team` /
 `swarm_workflow`. It looked like a model-behavior problem; it was not. It was a

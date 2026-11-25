@@ -12,7 +12,9 @@ export const DelegateParams = Type.Object({
   tasks: Type.Array(
     Type.Object({
       task: Type.String({ description: "Self-contained instructions for one worker. It cannot see this conversation." }),
-      agent: Type.Optional(Type.String({ description: "Agent name from ~/.pi/agent/agents or .pi/agents" })),
+      agent: Type.Optional(Type.String({ description: "Agent name: a built-in (reviewer, researcher, planner, oracle, worker) or a file in .pi/agents / ~/.pi/agent/agents (re-read on every call)" })),
+      role: Type.Optional(Type.String({ description: "Define the role yourself: system-prompt text for this worker (appended to the named agent's prompt, or used alone when no agent is given). Write it to fit the task." })),
+      tools: Type.Optional(Type.Array(Type.String(), { description: "Tool allowlist for this worker, overriding the agent's. Read-only: read, grep, find, ls (add bash to run checks). Writing: add edit, write." })),
       model: Type.Optional(Type.String({ description: "Override model (provider/model)" })),
       worktree: Type.Optional(Type.Boolean({ description: "Run in an isolated git worktree on its own branch (use for tasks that write files)" })),
     }),
@@ -32,12 +34,12 @@ export function delegateTool(getRt: (cwd: string) => Runtime): ToolDefinition<ty
     name: "swarm_delegate",
     label: "Swarm: delegate",
     description:
-      "Delegate tasks to isolated subagent workers (separate pi processes with their own context) and get their results back. One call runs many tasks in parallel; set chain=true for a sequential pipeline. Built-in agents work with no setup: reviewer (read-only code review), researcher (read-only investigation), planner, oracle (advice), worker (writes code). Use for focused, self-contained work: review, research, tests, small isolated edits.",
+      "Delegate tasks to isolated subagent workers (separate pi processes with their own context) and get their results back. One call runs many tasks in parallel; set chain=true for a sequential pipeline. Each task needs a role you define: create it first with swarm_agent (saved per project, then pass its name as agent), or give the task an inline role (system prompt) and tools. Built-in names (reviewer, researcher, planner, oracle, worker) are only examples. Use for focused, self-contained work: review, research, tests, small isolated edits.",
     promptSnippet:
-      'swarm_delegate({ tasks: [{ task: "Review src/auth.ts for race conditions", agent: "reviewer" }, { task: "…", agent: "worker", worktree: true }] })',
+      'swarm_delegate({ tasks: [{ task: "Review src/auth.ts for race conditions", agent: "auth-reviewer" }, { task: "Count TODOs in src/", role: "You count TODO comments. Read-only.", tools: ["read", "grep", "find", "ls"] }] })',
     promptGuidelines: [
       "Use swarm_delegate for independent, self-contained tasks; use swarm_team when tasks depend on each other or modules must coordinate; use swarm_workflow for large fan-out with resume.",
-      "Route by task kind: review/audit → agent reviewer (read-only, ends with VERDICT: PASS|FAIL), codebase questions → researcher, planning → planner, advice → oracle, changes → worker (worktree: true when writing).",
+      "Define the role each task needs first (swarm_agent, or an inline role/tools on the task); give writing roles worktree: true. Read-only roles: tools read, grep, find, ls.",
       "Give each swarm_delegate task full context: workers cannot see this conversation. Never let two parallel tasks edit the same files; set worktree=true for tasks that write.",
     ],
     parameters: DelegateParams,
@@ -48,7 +50,8 @@ export function delegateTool(getRt: (cwd: string) => Runtime): ToolDefinition<ty
       const runId = Date.now().toString(36);
       const root = params.tasks.some((t) => t.worktree) ? await repoRoot(rt.cwd) : undefined;
       if (params.tasks.some((t) => t.worktree) && !root) throw new Error("worktree=true requires the working directory to be inside a git repository.");
-      const agents = params.tasks.map((t) => rt.resolveAgent(t.agent)); // validates all names up front
+      // validates all names up front; inline role/tools layer on top of the named agent
+      const agents = params.tasks.map((t, i) => rt.inlineAgent(rt.resolveAgent(t.agent, { inlineRole: !!t.role?.trim() }), { role: t.role, tools: t.tools }, `inline#${i + 1}`));
 
       const items: (Item | undefined)[] = new Array(params.tasks.length).fill(undefined);
       const progress = () =>

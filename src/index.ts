@@ -5,6 +5,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { Runtime, type Job } from "./runtime.ts";
 import { loadConfig } from "./core/config.ts";
 import { discoverAgents } from "./core/agents.ts";
+import { agentTool } from "./modes/agent.ts";
 import { DEPTH_ENV, MATE_ENV, TEAM_DIR_ENV } from "./core/child.ts";
 import { formatLog, readLog } from "./core/eventlog.ts";
 import { registerChildTools } from "./child-tools.ts";
@@ -147,6 +148,7 @@ export default function swarmSuite(pi: ExtensionAPI): void {
     const { config, warnings } = loadConfig(ctx.cwd, trusted);
     const runtime = new Runtime(ctx.cwd, config, trusted, depth);
     runtime.agents = discoverAgents(ctx.cwd, trusted);
+    runtime.reloadAgents = () => discoverAgents(ctx.cwd, trusted);
     runtime.extPath = ownPath();
     if (ctx.model) runtime.sessionModel = `${ctx.model.provider}/${ctx.model.id}`;
     runtime.onChange = refreshWidget;
@@ -176,10 +178,11 @@ export default function swarmSuite(pi: ExtensionAPI): void {
     // Workers should follow the lead's model even after a mid-session model switch.
     if (rt && ctx.model) rt.sessionModel = `${ctx.model.provider}/${ctx.model.id}`;
     const tools = event.systemPromptOptions.selectedTools ?? [];
+    const customOnly = rt?.config.customRolesOnly ?? true;
     activeTools = [...tools];
     competitorTools = detectCompetitorTools(tools);
     if (tools.some((t) => SWARM_TOOL_NAMES.has(t))) {
-      event.systemPromptOptions.sections[SECTION_KEY] = buildSwarmSection(competitorTools);
+      event.systemPromptOptions.sections[SECTION_KEY] = buildSwarmSection(competitorTools, customOnly);
     } else {
       // Safety net: never leave a stale swarm section in the prompt when our tools are disabled.
       delete event.systemPromptOptions.sections[SECTION_KEY];
@@ -196,6 +199,7 @@ export default function swarmSuite(pi: ExtensionAPI): void {
     }
   });
 
+  pi.registerTool(agentTool(getRt));
   pi.registerTool(delegateTool(getRt));
   pi.registerTool(teamTool(getRt));
   pi.registerTool(workflowTool(getRt));
@@ -302,8 +306,11 @@ export default function swarmSuite(pi: ExtensionAPI): void {
             say(doctorReport({ runtime, extPath: ownPath(), activeTools, competitorTools }));
             break;
           case "agents": {
-            const list = [...runtime.agents.values()].map((a) => `${a.name} (${a.source}${a.tier ? `, ${a.tier}` : ""}) — ${a.description}`);
-            say(list.length ? list.join("\n") : "No agents found. Add .md files to ~/.pi/agent/agents or .pi/agents (trusted projects only).");
+            runtime.refreshAgents();
+            const list = [...runtime.agents.values()].map(
+              (a) => `${a.name} [${a.source}${a.tier ? `, ${a.tier}` : ""}] tools: ${a.tools?.join(",") ?? "(all/default)"} — ${a.description}${a.source === "builtin" ? "" : `\n    ${a.filePath}`}`,
+            );
+            say(list.length ? list.join("\n") : "No agents found. Add .md files to ~/.pi/agent/agents or .pi/agents (trusted projects only). See docs/CUSTOM-AGENTS.md.");
             break;
           }
           case "teams": {

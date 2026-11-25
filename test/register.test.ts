@@ -21,10 +21,10 @@ afterEach(() => {
 });
 
 describe("extension registration", () => {
-  it("registers exactly one tool per mode under unique swarm_* names plus one /swarm command", () => {
+  it("registers one tool per mode plus swarm_agent, under unique swarm_* names plus one /swarm command", () => {
     const f = fakePi();
     swarmSuite(f.pi);
-    expect(f.tools.sort()).toEqual(["swarm_delegate", "swarm_team", "swarm_workflow"]);
+    expect(f.tools.sort()).toEqual(["swarm_agent", "swarm_delegate", "swarm_team", "swarm_workflow"]);
     expect(f.commands).toEqual(["swarm"]);
     expect(f.events).toEqual(expect.arrayContaining(["session_start", "session_shutdown"]));
   });

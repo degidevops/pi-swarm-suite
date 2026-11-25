@@ -15,6 +15,7 @@
     "worker": "provider/mid-model",
     "cheap": "provider/fast-model"
   },
+  "customRolesOnly": true,
   "reviewer": "reviewer",
   "monitor": {
     "idleWarnSec": 60,

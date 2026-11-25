@@ -59,13 +59,13 @@ export interface DoctorInput {
 export function doctorReport(input: DoctorInput): string {
   const { runtime: rt } = input;
   const out: string[] = [];
-  const bySource = { builtin: [] as string[], user: [] as string[], project: [] as string[] };
+  const bySource = { builtin: [] as string[], user: [] as string[], project: [] as string[], inline: [] as string[] };
   for (const a of rt.agents.values()) bySource[a.source].push(a.name);
 
   out.push("swarm doctor — environment diagnosis");
   out.push("");
   out.push(`extension      pi-swarm-suite loaded${input.extPath ? ` from ${input.extPath}` : ""}${input.piVersion ? ` (pi ${input.piVersion})` : ""}`);
-  const own = ["swarm_delegate", "swarm_team", "swarm_workflow"];
+  const own = ["swarm_agent", "swarm_delegate", "swarm_team", "swarm_workflow"];
   out.push(`swarm tools    ${own.join(", ")}${input.activeTools.length ? " (active in prompt)" : " (not seen in a turn yet — send a prompt first)"}`);
 
   const competitors = summarizeCompetitors(input.competitorTools);

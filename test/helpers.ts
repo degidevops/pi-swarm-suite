@@ -29,7 +29,7 @@ export function mkRuntime(cwd: string, cfg: Partial<SwarmConfig> = {}, agents: A
   const logFile = path.join(os.tmpdir(), `fake-log-${Math.random().toString(36).slice(2)}.jsonl`);
   process.env.PI_SWARM_PI_BIN = FAKE_PI;
   process.env.PI_FAKE_LOG = logFile;
-  const rt = new Runtime(cwd, { ...DEFAULT_CONFIG, models: {}, ...cfg }, true, 0);
+  const rt = new Runtime(cwd, { ...DEFAULT_CONFIG, models: {}, customRolesOnly: false, ...cfg }, true, 0);
   rt.agents = new Map(agents.map((a) => [a.name, a]));
   rt.extPath = "/fake/ext/index.ts";
   return { rt, logFile };

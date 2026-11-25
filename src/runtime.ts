@@ -101,6 +101,11 @@ export class Runtime {
   readonly workers = new Map<number, WorkerInfo>();
   readonly jobs = new Map<string, Job>();
   agents = new Map<string, AgentDef>();
+  /**
+   * Re-reads agent files from disk. Set by the extension. resolveAgent() calls it so an agent file the lead
+   * (or the user) created or edited after session start is picked up without a /reload.
+   */
+  reloadAgents?: () => Map<string, AgentDef>;
   /** Extension file team children load so they get the messaging tools. */
   extPath?: string;
   /** Model of the parent session ("provider/id"); workers fall back to it when nothing else is configured. */
@@ -165,17 +170,75 @@ export class Runtime {
     this.onChange();
   }
 
-  resolveAgent(name: string | undefined): AgentDef | undefined {
-    if (!name) return undefined;
+  /**
+   * Resolve an agent name. With config.customRolesOnly (default) only project-defined agents are usable: built-ins
+   * and global user agents are examples, and a missing agent is an error — the lead must define the role first
+   * with swarm_agent (or pass an inline role on swarm_delegate, signalled by opts.inlineRole).
+   */
+  resolveAgent(name: string | undefined, opts: { inlineRole?: boolean } = {}): AgentDef | undefined {
+    const strict = this.config.customRolesOnly;
+    if (!name) {
+      if (strict && !opts.inlineRole) {
+        throw new Error(
+          `No agent given. Custom roles are required in this project: define the role you need with swarm_agent ` +
+            `({ action: "define", name, description, tools, prompt }) and pass it as agent, or (swarm_delegate only) give an inline role. ` +
+            `Project agents: ${this.projectAgentNames().join(", ") || "(none yet)"}.`,
+        );
+      }
+      return undefined;
+    }
+    this.refreshAgents();
     const a = this.agents.get(name);
     if (!a) {
-      const names = [...this.agents.keys()].join(", ") || "(none found)";
       throw new Error(
-        `Unknown agent "${name}". Available agents: ${names}. ` +
-          `Built-ins (reviewer, researcher, planner, oracle, worker) always work; add .md files to ~/.pi/agent/agents or .pi/agents for custom ones.`,
+        `Unknown agent "${name}". Project agents: ${this.projectAgentNames().join(", ") || "(none yet)"}. ` +
+          (strict
+            ? `Define it first: swarm_agent({ action: "define", name: "${name}", description, tools, prompt }). Use swarm_agent action="examples" to see example roles.`
+            : `Built-ins (reviewer, researcher, planner, oracle, worker) always work; define your own with swarm_agent or a .md file in .pi/agents. See docs/CUSTOM-AGENTS.md.`),
+      );
+    }
+    if (strict && a.source !== "project") {
+      throw new Error(
+        `Agent "${name}" is a ${a.source === "builtin" ? "built-in example" : "global user agent"}, not a project role. ` +
+          `This project requires roles you define for it: swarm_agent({ action: "define", name: "${name}", from: "${name}", ... }) ` +
+          `copies it into .pi/agents as a starting point you then adapt (or set "customRolesOnly": false in swarm.json). ` +
+          `Project agents: ${this.projectAgentNames().join(", ") || "(none yet)"}.`,
       );
     }
     return a;
+  }
+
+  projectAgentNames(): string[] {
+    return [...this.agents.values()].filter((x) => x.source === "project").map((x) => x.name);
+  }
+
+  /** Re-discover agent files; keeps the previous set if discovery throws. */
+  refreshAgents(): void {
+    if (!this.reloadAgents) return;
+    try {
+      this.agents = this.reloadAgents();
+    } catch {
+      /* keep the cached agents */
+    }
+  }
+
+  /**
+   * Build a one-off role for a single call. `base` (a named agent) supplies defaults; `role` is appended to
+   * (or replaces, when there is no base) the system prompt; `tools` replaces the tool allowlist.
+   */
+  inlineAgent(base: AgentDef | undefined, spec: { role?: string; tools?: string[]; tier?: Tier }, label: string): AgentDef | undefined {
+    if (!spec.role?.trim() && !spec.tools?.length && !spec.tier) return base;
+    const role = spec.role?.trim();
+    return {
+      name: base?.name ?? label,
+      description: base?.description ?? "inline role",
+      tools: spec.tools?.length ? spec.tools : base?.tools,
+      model: base?.model,
+      tier: spec.tier ?? base?.tier,
+      systemPrompt: [base?.systemPrompt?.trim(), role].filter(Boolean).join("\n\n"),
+      source: "inline",
+      filePath: "(inline)",
+    };
   }
 
   /** Send a new instruction to a running steerable worker. Returns false if it is not running. */

@@ -4,7 +4,7 @@
 Separate swarm packages each register their own `workflow` tool/skill, so pi disables one of them. Here every mode shares one `Runtime`, one ledger, one widget, one skill and uniquely named tools.
 
 ```
-index.ts ─ registers swarm_delegate / swarm_team / swarm_workflow + /swarm
+index.ts ─ registers swarm_agent / swarm_delegate / swarm_team / swarm_workflow + /swarm
    │
    ├─ modes/delegate  ─┐
    ├─ modes/team      ─┼─►  Runtime.run()  ─►  core/worker (spawn `pi --mode json -p --no-session`)
@@ -35,7 +35,7 @@ core: tasks (file-per-task, lock) · mailbox (JSONL) · journal (JSONL replay) �
 | `src/core/review.ts` | `buildReviewPrompt`, `parseVerdict` — independent reviewer. |
 | `src/core/eventlog.ts` | per-team event log (`appendLog`). |
 | `src/core/config.ts` | `parseConfig` — parses `swarm.json` including `preHooks`/`postHooks`. |
-| `src/core/agents.ts` | agent definition loading: `BUILT_IN_AGENTS` (reviewer/researcher/planner/oracle/worker, zero-setup) + discovery of user (`~/.pi/agent/agents`) and project (`.pi/agents`, trusted only) files; later sources override built-ins by name. |
+| `src/core/agents.ts` | agent definitions: `BUILT_IN_AGENTS` (reviewer/researcher/planner/oracle/worker — **examples only** by default) + discovery of user (`~/.pi/agent/agents`) and project (`.pi/agents`, trusted only) files, later sources override by name; `serializeAgent`/`projectAgentsDirForWrite` back `swarm_agent`. `Runtime.resolveAgent` enforces `customRolesOnly` (only project roles usable) and re-reads files on every call. |
 | `src/core/prompt.ts` | model-visibility layer: `buildSwarmSection` (the `<swarm_orchestration>` prompt body), `detectCompetitorTools` (finds acp_delegate & friends in the active tool list), `summarizeCompetitors`, `SWARM_TOOL_NAMES`. |
 | `src/core/doctor.ts` | `/swarm doctor` report: active tools, competing delegate tools + per-package opt-out advice, agents by source, config, git, budget. |
 | `src/core/monitor.ts` | `ActivityTracker` (event stream → phase: waiting/thinking/writing/tool/retrying/compacting), `assess()` (active/quiet/stalled, phase-aware thresholds), `describePhase`, `describeProbe`. Pure; clock injected. |
@@ -49,6 +49,7 @@ core: tasks (file-per-task, lock) · mailbox (JSONL) · journal (JSONL replay) �
 | `src/child-tools.ts` | teammate-side tools (`team_message`, `team_inbox`, `team_tasks`, `team_task_request`). |
 | `src/modes/delegate.ts` | `swarm_delegate` tool factory. |
 | `src/modes/team.ts` | `swarm_team` tool factory; `runTeam()` (planning pass → worker → scope → gates → review → commit), `mergeTeam()` (conflict-resolution via scratch worktree). |
+| `src/modes/agent.ts` | `swarm_agent` tool: define/list/examples/remove per-project roles (`.pi/agents/*.md`). |
 | `src/modes/workflow.ts` | `swarm_workflow` tool factory; fan-out/reduce with journaled resume. |
 | `src/ui.ts` | tool renderers (`renderCallFor`, `renderResultText`). |
 | `src/ui-dashboard.ts` | `DashboardComponent` — TUI overlay for `/swarm board`. |
@@ -94,5 +95,5 @@ Project config/agents need trust. Gates run via shell from trusted config only. 
 ```bash
 # in a scratch dir with pi's SDK installed
 node --import tsx sdkload.mts   # DefaultResourceLoader({extensionFactories:[swarm]}) → getActiveToolNames()
-# expect: read, bash, edit, write, swarm_delegate, swarm_team, swarm_workflow
+# expect: read, bash, edit, write, swarm_agent, swarm_delegate, swarm_team, swarm_workflow
 ```

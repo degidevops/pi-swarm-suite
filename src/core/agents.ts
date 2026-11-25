@@ -109,7 +109,7 @@ function loadDir(dir: string, source: AgentDef["source"]): AgentDef[] {
   return out;
 }
 
-function nearestProjectAgentsDir(cwd: string): string | null {
+export function nearestProjectAgentsDir(cwd: string): string | null {
   let dir = cwd;
   while (true) {
     const candidate = path.join(dir, CONFIG_DIR_NAME, "agents");
@@ -133,4 +133,24 @@ export function discoverAgents(cwd: string, projectTrusted: boolean): Map<string
     if (dir) for (const a of loadDir(dir, "project")) map.set(a.name, a);
   }
   return map;
+}
+
+/** Where swarm_agent writes: the nearest existing project agents dir, else <cwd>/.pi/agents. */
+export function projectAgentsDirForWrite(cwd: string): string {
+  return nearestProjectAgentsDir(cwd) ?? path.join(cwd, CONFIG_DIR_NAME, "agents");
+}
+
+const TOOL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/;
+
+/** Serialize an agent as a .md file (JSON strings/arrays are valid YAML, so quoting is safe). */
+export function serializeAgent(a: { name: string; description: string; tools?: string[]; tier?: string; model?: string; systemPrompt: string }): string {
+  const fm = ["---", `name: ${a.name}`, `description: ${JSON.stringify(a.description.replace(/\s+/g, " ").trim())}`];
+  if (a.tools?.length) {
+    for (const t of a.tools) if (!TOOL_NAME_RE.test(t)) throw new Error(`Invalid tool name "${t}".`);
+    fm.push(`tools: ${JSON.stringify(a.tools)}`);
+  }
+  if (a.tier) fm.push(`tier: ${a.tier}`);
+  if (a.model) fm.push(`model: ${JSON.stringify(a.model)}`);
+  fm.push("---", "");
+  return `${fm.join("\n")}${a.systemPrompt.trim()}\n`;
 }

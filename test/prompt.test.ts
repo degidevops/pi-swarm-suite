@@ -6,6 +6,7 @@ import swarmSuite from "../src/index.ts";
 import { delegateTool } from "../src/modes/delegate.ts";
 import { teamTool } from "../src/modes/team.ts";
 import { workflowTool } from "../src/modes/workflow.ts";
+import { agentTool } from "../src/modes/agent.ts";
 import { BUILT_IN_AGENTS, discoverAgents } from "../src/core/agents.ts";
 import { buildSwarmSection, detectCompetitorTools, summarizeCompetitors, SWARM_TOOL_NAMES } from "../src/core/prompt.ts";
 import { doctorReport } from "../src/core/doctor.ts";
@@ -31,8 +32,8 @@ describe("built-in agents", () => {
     expect(worker.tools).toEqual(expect.arrayContaining(["edit", "write"]));
   });
 
-  it("resolveAgent finds built-ins on a fresh install (cold start, no agent files)", () => {
-    const rt = new Runtime(process.cwd(), { ...DEFAULT_CONFIG, models: {} }, false, 0);
+  it("with customRolesOnly:false, resolveAgent finds built-ins on a fresh install (cold start, no agent files)", () => {
+    const rt = new Runtime(process.cwd(), { ...DEFAULT_CONFIG, models: {}, customRolesOnly: false }, false, 0);
     rt.agents = discoverAgents(process.cwd(), false);
     expect(rt.resolveAgent("reviewer")?.source).toBe("builtin");
     expect(rt.resolveAgent("researcher")?.systemPrompt).toContain("researcher");
@@ -60,8 +61,8 @@ describe("built-in agents", () => {
     }
   });
 
-  it("resolveAgent error suggests built-ins and custom agent paths", () => {
-    const rt = new Runtime(process.cwd(), { ...DEFAULT_CONFIG, models: {} }, false, 0);
+  it("with customRolesOnly:false, resolveAgent error suggests built-ins and swarm_agent", () => {
+    const rt = new Runtime(process.cwd(), { ...DEFAULT_CONFIG, models: {}, customRolesOnly: false }, false, 0);
     rt.agents = discoverAgents(process.cwd(), false);
     expect(() => rt.resolveAgent("nonexistent")).toThrow(/Built-ins \(reviewer, researcher, planner, oracle, worker\)/);
   });
@@ -78,19 +79,22 @@ describe("prompt snippets and guidelines", () => {
     }
   });
 
-  it("swarm_delegate snippet demonstrates agent routing", () => {
+  it("swarm_delegate snippet demonstrates a named custom role and an inline role", () => {
     const d = delegateTool(getRt);
-    expect(d.promptSnippet).toContain('"reviewer"');
-    expect(d.promptSnippet).toContain("worktree");
+    expect(d.promptSnippet).toContain("agent:");
+    expect(d.promptSnippet).toContain("role:");
+    expect(d.promptSnippet).not.toContain('"reviewer"');
   });
 
-  it("delegate guidelines teach role routing", () => {
+  it("delegate guidelines tell the lead to define roles first", () => {
     const g = delegateTool(getRt).promptGuidelines ?? [];
-    expect(g.join(" ")).toMatch(/reviewer.*researcher.*planner.*oracle.*worker/);
+    expect(g.join(" ")).toMatch(/swarm_agent/);
   });
 
-  it("descriptions mention built-in agents so cold-start routing works", () => {
-    for (const t of tools) expect(t.description).toMatch(/reviewer|worker/);
+  it("delegate/team descriptions say roles are lead-defined and built-ins are examples", () => {
+    expect(delegateTool(getRt).description).toMatch(/swarm_agent/);
+    expect(teamTool(getRt).description).toMatch(/swarm_agent/);
+    expect(agentTool(getRt).description).toMatch(/only examples/);
   });
 });
 
@@ -123,7 +127,8 @@ describe("swarm_orchestration prompt section", () => {
     expect(s).toContain("swarm_delegate");
     expect(s).toContain("swarm_team");
     expect(s).toContain("swarm_workflow");
-    expect(s).toContain("reviewer");
+    expect(s).toContain("swarm_agent");
+    expect(s).toContain("not usable as-is");
     expect(s).toContain("VERDICT");
     expect(s).toContain("do it yourself");
     expect(s).toContain("/swarm merge");
@@ -138,6 +143,12 @@ describe("swarm_orchestration prompt section", () => {
     expect(s).toContain("Tool preference");
     expect(s).toContain("acp_delegate");
     expect(s).toMatch(/Prefer the swarm_\* tools for delegation/);
+  });
+
+  it("legacy mode (customRolesOnly:false) still presents built-ins as ready to use", () => {
+    const s = buildSwarmSection([], false);
+    expect(s).toContain("built-in agents work with no setup");
+    expect(s).not.toContain("you build them (required)");
   });
 
   it("is single blocks without stray blank tails", () => {
@@ -254,13 +265,13 @@ describe("/swarm doctor report", () => {
   });
 });
 
-describe("cold-start delegation e2e (built-in reviewer, fake pi)", () => {
+describe("cold-start delegation e2e (built-in reviewer, fake pi, customRolesOnly:false)", () => {
   it("swarm_delegate resolves agent:'reviewer' with no agent files and passes the built-in prompt to the worker", async () => {
     const repo = mkRepo();
     const logFile = path.join(os.tmpdir(), `fake-log-${Math.random().toString(36).slice(2)}.jsonl`);
     process.env.PI_SWARM_PI_BIN = FAKE_PI;
     process.env.PI_FAKE_LOG = logFile;
-    const rt = new Runtime(repo, { ...DEFAULT_CONFIG, models: {} }, true, 0);
+    const rt = new Runtime(repo, { ...DEFAULT_CONFIG, models: {}, customRolesOnly: false }, true, 0);
     rt.agents = discoverAgents(repo, false); // no user/project agent files: built-ins only
     try {
       const tool = delegateTool(() => rt);

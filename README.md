@@ -1,6 +1,6 @@
 # pi-swarm-suite
 
-One pi extension that replaces a stack of swarm packages (and their tool/skill collisions) with three modes on a shared runtime, modelled on Claude Code's subagents, agent teams and dynamic workflows, plus a few things Claude Code does not do.
+One pi extension that replaces a stack of swarm packages (and their tool/skill collisions) with three modes on a shared runtime plus a role builder (`swarm_agent`), modelled on Claude Code's subagents, agent teams and dynamic workflows, plus a few things Claude Code does not do.
 
 | Tool | Claude Code analogue | Use for |
 |---|---|---|
@@ -8,9 +8,9 @@ One pi extension that replaces a stack of swarm packages (and their tool/skill c
 | `swarm_team` | agent teams | dependent tasks, shared task list, live messaging, worktrees, scopes, plan approval, gates, review |
 | `swarm_workflow` | dynamic workflows | fan-out → reduce/verify, journaled resume, per-item worktrees |
 
-Plus `/swarm` (status, jobs, tasks, log, steer, merge, stop, board, attach, tail, cost, **doctor**), a live widget, a cost ledger with per-agent breakdown, tier-based model routing, dynamic task creation, cross-process attach, one skill that teaches the model which mode to pick, **five built-in agents that work with zero setup**, and a dedicated `<swarm_orchestration>` system-prompt section so the model actually prefers these tools over other delegation packages.
+Plus `/swarm` (status, jobs, tasks, log, steer, merge, stop, board, attach, tail, cost, **doctor**), a live widget, a cost ledger with per-agent breakdown, tier-based model routing, dynamic task creation, cross-process attach, one skill that teaches the model which mode to pick, **five example roles plus `swarm_agent`, so the lead builds the roles each project needs**, and a dedicated `<swarm_orchestration>` system-prompt section so the model actually prefers these tools over other delegation packages.
 
-## Built-in agents (zero setup)
+## Example roles (built-in)
 
 | Agent | Tools | Use for |
 |---|---|---|
@@ -20,7 +20,15 @@ Plus `/swarm` (status, jobs, tasks, log, steer, merge, stop, board, attach, tail
 | `oracle` | read-only (+bash) | questions, advice, trade-offs |
 | `worker` | read, edit, write, bash | implementation (use `worktree: true`) |
 
-They exist so a fresh install can delegate immediately — no agent files required. Your own `.md` files (in `~/.pi/agent/agents` or `.pi/agents`) override built-ins by name.
+**They are examples, not usable roles.** By default (`customRolesOnly: true`) the lead agent must build the roles a project needs with the `swarm_agent` tool, which saves them to that project's `.pi/agents/` (never global). Defined roles work in `swarm_delegate`, `swarm_team` and `swarm_workflow`; `swarm_delegate` also accepts a one-off inline `role` + `tools` on a task.
+
+```
+swarm_agent({ action: "define", name: "db-auditor", description: "Audits SQL migrations",
+              tools: ["read","grep","find","ls"], prompt: "You audit migrations/ ... Never modify files." })
+```
+`swarm_agent` also has `list`, `examples` (shows the built-ins to adapt; `from: "reviewer"` copies one), and `remove`. Files are re-read on every call, so a role works the moment it exists. Set `"customRolesOnly": false` in `swarm.json` to use built-ins and global `~/.pi/agent/agents` directly (project roles still override by name).
+
+Note: the example "read-only" roles include `bash`, which can write; omit it for a hard guarantee. Full reference: [docs/CUSTOM-AGENTS.md](docs/CUSTOM-AGENTS.md).
 
 ## What's implemented (v0.3.0)
 
@@ -28,7 +36,7 @@ They exist so a fresh install can delegate immediately — no agent files requir
 
 **Model inheritance (v0.3.0):** workers default to the lead session's current model (also after a mid-session model switch) when neither the task, the agent, nor `swarm.json models.*` names one.
 
-**Model-visibility layer (v0.3.0):** the extension injects a `<swarm_orchestration>` section into the system prompt (mode routing, built-in agents, example call, rules). When another delegation tool is also installed (billion-context's `acp_delegate`, pi-subagents, …) the section gains an explicit preference paragraph telling the model to use the swarm tools for delegation — detected live from the active tool list. Tool snippets are concrete call examples. `/swarm doctor` reports the whole environment: active tools, competing delegate tools with per-package opt-out advice, agents by source, config, git, budget.
+**Model-visibility layer (v0.3.0):** the extension injects a `<swarm_orchestration>` section into the system prompt (mode routing, how to build project roles with `swarm_agent`, example calls, rules). When another delegation tool is also installed (billion-context's `acp_delegate`, pi-subagents, …) the section gains an explicit preference paragraph telling the model to use the swarm tools for delegation — detected live from the active tool list. Tool snippets are concrete call examples. `/swarm doctor` reports the whole environment: active tools, competing delegate tools with per-package opt-out advice, agents by source, config, git, budget.
 
 **Team mode additions:**
 - `team_task_add` — teammates create new pending tasks; lead approves/revises plans
@@ -107,18 +115,17 @@ Verified against `nvidia/nemotron-3.5-super-vl-120b-a12b` via `pi install ./`:
 
 ## Optional setup — `pi install` is enough
 
-Out of the box, with no other steps: five built-in agents (`reviewer`, `researcher`, `planner`,
-`oracle`, `worker`) cover the common delegation roles, and sane defaults apply (concurrency 4,
+Out of the box: the lead defines its own roles with `swarm_agent` (the five built-ins are examples), and sane defaults apply (concurrency 4,
 worktrees on, retries 2). Nothing else to configure.
 
 The block below is **customization only** — copy it when you want your own agent definitions or
-non-default behaviour; both override the built-ins by name:
+non-default behaviour; `.pi/agents` roles are per project; `swarm.json` may also set `"reviewer"`, which must name a project role:
 ```bash
-mkdir -p ~/.pi/agent/agents && cp examples/agents/*.md ~/.pi/agent/agents/   # your own agents (override built-ins)
+mkdir -p .pi/agents && cp examples/agents/*.md .pi/agents/   # example roles as PROJECT roles (or let the lead build its own with swarm_agent)
 cp examples/swarm.json ~/.pi/agent/swarm.json     # global config; or <repo>/.pi/swarm.json (trusted projects only)
 ```
 Diagnose your environment any time with `/swarm doctor` (inside pi) or `node scripts/diagnose-prompt.mjs` (headless, no token).
-`swarm.json` (all keys optional): `maxConcurrency` (cap 16), `budgetUsd`, `worktrees`, `gates` (shell commands that must pass), `maxAttempts`, `reviewer` (agent that reviews each task's diff), `models.{lead,worker,cheap}`, `workerTools`, `preHooks`, `postHooks`, `monitor.{idleWarnSec,idleKillSec,slowPhaseFactor,maxWorkerSec,probe,nudge,tickMs}`, `tmux` (`true` or `{enabled, session}`). Agent files take `name`, `description`, `tools`, `model`, `tier: lead|worker|cheap`.
+`swarm.json` (all keys optional): `maxConcurrency` (cap 16), `budgetUsd`, `worktrees`, `gates` (shell commands that must pass), `maxAttempts`, `reviewer` (project role that reviews each task's diff), `customRolesOnly` (default true), `models.{lead,worker,cheap}`, `workerTools`, `preHooks`, `postHooks`, `monitor.{idleWarnSec,idleKillSec,slowPhaseFactor,maxWorkerSec,probe,nudge,tickMs}`, `tmux` (`true` or `{enabled, session}`). Agent files take `name`, `description` (both required), `tools`, `model`, `tier: lead|worker|cheap` — see [docs/CUSTOM-AGENTS.md](docs/CUSTOM-AGENTS.md).
 
 ## Typical session
 ```
@@ -135,6 +142,6 @@ Other examples: `examples/workflow-audit.json` (fan-out audit with cold verify),
 Agents never merge; you do (`/swarm merge`). Project config/agents load only in trusted projects. Workers inherit your credentials and file access: limit `tools:` per agent (reviewer/scout are read-only). Set `budgetUsd`; start with 2–4 workers. Headless workers auto-cancel extension dialogs, so extensions that ask for confirmation will be denied inside workers.
 
 ## Status
-Typecheck clean; 111 tests pass (unit, real git, end-to-end vs a scripted fake pi, prompt-visibility, doctor); loads in real pi in all three roles (verified headless in CI with and without billion-context); real-model shakedown passed on nvidia provider. Dev-only `npm audit` notes come from vitest's transitive deps; production dependencies have none.
+Typecheck clean; 152 tests pass (unit, real git, end-to-end vs a scripted fake pi, prompt-visibility, doctor); loads in real pi in all three roles (verified headless in CI with and without billion-context); real-model shakedown passed on nvidia provider. Dev-only `npm audit` notes come from vitest's transitive deps; production dependencies have none.
 
-See `AGENTS.md` (for agents/contributors), `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`, and `docs/FIX-DELEGATION.md` (why the model used to prefer billion-context's acp_delegate, and what changed).
+See `AGENTS.md` (for agents/contributors), `docs/CUSTOM-AGENTS.md` (defining roles), `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`, and `docs/FIX-DELEGATION.md` (why the model used to prefer billion-context's acp_delegate, and what changed).

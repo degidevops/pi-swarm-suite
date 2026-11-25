@@ -46,8 +46,8 @@ export interface AgentDef {
   systemPrompt: string;
   /** Model tier: lets config.models route this agent to a strong/mid/cheap model. */
   tier?: Tier;
-  /** Where the definition came from. Built-ins ship with the package; user/project files override them. */
-  source: "builtin" | "user" | "project";
+  /** Where the definition came from. Built-ins ship with the package; user/project files override them; "inline" roles are defined per call by the lead. */
+  source: "builtin" | "user" | "project" | "inline";
   filePath: string;
 }
 
@@ -70,6 +70,12 @@ export interface SwarmConfig {
   models: { lead?: string; worker?: string; cheap?: string };
   /** Default tool allowlist for children when the agent definition has none. */
   workerTools?: string[];
+  /**
+   * When true (default) the built-in agents and global user agents are NOT usable: they are only examples.
+   * The lead must define the roles a project needs (swarm_agent -> <project>/.pi/agents/*.md, or an inline
+   * role on swarm_delegate). Set false in swarm.json to allow built-ins / global agents directly.
+   */
+  customRolesOnly: boolean;
   /** Agent name that independently reviews each team task's diff before it counts as done. */
   reviewer?: string;
   /** Worker activity monitor / stall watchdog. Missing keys fall back to DEFAULT_MONITOR. */

@@ -1,7 +1,7 @@
 # AGENTS.md — pi-swarm-suite
 
 A single pi extension that provides three orchestration modes behind one runtime, so nothing conflicts:
-`swarm_delegate` (subagents), `swarm_team` (lead + teammates, shared task list, mailbox), `swarm_workflow` (fan-out/reduce with journaled resume). Plus `/swarm` command (incl. `doctor`), one live widget, one skill, five built-in agents, and a `<swarm_orchestration>` system-prompt section.
+`swarm_agent` (role builder), `swarm_delegate` (subagents), `swarm_team` (lead + teammates, shared task list, mailbox), `swarm_workflow` (fan-out/reduce with journaled resume). Plus `/swarm` command (incl. `doctor`), one live widget, one skill, five built-in agents, and a `<swarm_orchestration>` system-prompt section.
 
 ## Commands
 - `npm install` — install deps (peer: `@earendil-works/pi-coding-agent`, `typebox`)
@@ -14,9 +14,9 @@ A single pi extension that provides three orchestration modes behind one runtime
 
 ## Architecture (read docs/ARCHITECTURE.md first)
 - `src/runtime.ts` — ONE `Runtime`: launches every worker (concurrency, budget, ledger, abort, widget). All modes go through `Runtime.run()`. Never spawn processes anywhere else. Also handles cross-process steer polling (`ensureSteerPolling`), per-agent costs (`agentCosts`), attach state (`listAttachableTeams`, `getTeamRunning`, `getTeamWorkers`, `getTeamJobs`).
-- `src/core/` — building blocks: `child.ts` (arg/env/binary for children), `worker.ts` (one-shot JSON worker + `Collector`), `rpc.ts` (steerable RPC worker), `tasks.ts`, `mailbox.ts`, `journal.ts`, `git.ts`, `gates.ts`, `scope.ts`, `review.ts`, `eventlog.ts`, `config.ts`, `agents.ts` (built-ins + discovery), `prompt.ts` (system-prompt section + competitor detection), `doctor.ts` (`/swarm doctor` report), `ledger.ts`, `pool.ts`, `util.ts`, `attach.ts`, `transcript.ts`.
+- `src/core/` — building blocks: `child.ts` (arg/env/binary for children), `worker.ts` (one-shot JSON worker + `Collector`), `rpc.ts` (steerable RPC worker), `tasks.ts`, `mailbox.ts`, `journal.ts`, `git.ts`, `gates.ts`, `scope.ts`, `review.ts`, `eventlog.ts`, `config.ts`, `agents.ts` (example roles, discovery of user/project agent files, `serializeAgent`, `projectAgentsDirForWrite`), `prompt.ts` (system-prompt section + competitor detection), `doctor.ts` (`/swarm doctor` report), `ledger.ts`, `pool.ts`, `util.ts`, `attach.ts`, `transcript.ts`.
 - `src/child-tools.ts` — teammate-side tools (`team_message`, `team_inbox`, `team_tasks`, `team_task_request`); `src/ui.ts` — tool renderers; `src/ui-dashboard.ts` — `DashboardComponent` for `/swarm board`.
-- `src/modes/` — `delegate.ts`, `team.ts`, `workflow.ts`; each exports a tool factory taking `getRt(cwd)`.
+- `src/modes/` — `agent.ts` (swarm_agent), `delegate.ts`, `team.ts`, `workflow.ts`; each exports a tool factory taking `getRt(cwd)`.
 - `src/index.ts` — registers tools + `/swarm`, injects the `<swarm_orchestration>` section in `before_agent_start` (with live competitor detection from `selectedTools`), and exposes `/swarm doctor`. At `PI_SWARM_DEPTH >= 1` it registers ONLY the teammate tools (when `PI_SWARM_TEAM_DIR`/`PI_SWARM_MATE` are set), never orchestration tools.
 
 ## Invariants — do not break
@@ -31,8 +31,8 @@ A single pi extension that provides three orchestration modes behind one runtime
 9. Headless workers must never block on UI: `RpcWorker` auto-cancels extension dialogs. Keep that.
 10. Anything that steers/aborts a worker goes through `Runtime` (`steer`, `abortAll`, `stopJob`), never directly to a process.
 11. Child tool names in `CHILD_TOOL_NAMES` (runtime.ts) must match `child-tools.ts`, or `--tools` allowlists will hide them.
-12. Model visibility is part of the product: the `<swarm_orchestration>` section, example-style `promptSnippet`s (never `name: description` — pi already prefixes the name) and the built-in agents exist so the model prefers these tools over competing delegate packages. If you change tool names, update `SWARM_TOOL_NAMES`, the section builder and `scripts/diagnose-prompt.mjs` together, and keep `test/prompt.test.ts` green.
-13. Built-in agents (reviewer/researcher/planner/oracle/worker) are the cold-start fallback only: user and project agent files must keep overriding them by name.
+12. Model visibility is part of the product: the `<swarm_orchestration>` section, example-style `promptSnippet`s (never `name: description` — pi already prefixes the name) and the example roles exist so the model prefers these tools over competing delegate packages. The section has two variants (`buildSwarmSection(competitors, customRolesOnly)`): in the default mode it tells the model to build its own roles with `swarm_agent`. If you change tool names (now incl. `swarm_agent`), update `SWARM_TOOL_NAMES`, the section builder and `scripts/diagnose-prompt.mjs` together, and keep `test/prompt.test.ts` green.
+13. Built-in agents (reviewer/researcher/planner/oracle/worker) are EXAMPLES. With `customRolesOnly` (default true) `Runtime.resolveAgent` refuses built-in and global user agents and a missing agent; the lead builds project roles with `swarm_agent` (writes `<project>/.pi/agents/*.md`, trusted projects only) or an inline `role`/`tools` on a `swarm_delegate` task. `customRolesOnly:false` restores the old cold-start behaviour (user/project files override built-ins by name). Agent files are re-read on every resolve (`Runtime.reloadAgents`).
 
 ## Conventions
 - TypeScript, ESM, `.ts` import suffixes, strict mode. Tabs/spaces: follow existing files (2 spaces).
@@ -40,7 +40,14 @@ A single pi extension that provides three orchestration modes behind one runtime
 - Add a vitest test for every new pure function. Git behaviour is tested against real temp repos.
 - `promptSnippet`s must be single-line concrete call examples (see invariant 12); every char costs tokens on every request.
 
+## Roles (custom-roles-only, default)
+- Flow: lead calls `swarm_agent define` → `<project>/.pi/agents/<name>.md` (`src/modes/agent.ts`) → `Runtime.resolveAgent(name)` re-reads files (`reloadAgents`) and accepts only `source: "project"` (inline roles on `swarm_delegate` are built by `Runtime.inlineAgent`, source `"inline"`).
+- Enforcement lives ONLY in `Runtime.resolveAgent`; every mode (delegate/team/workflow, team reviewer) must resolve agents through it. Never read `rt.agents` directly to pick an agent to run.
+- `swarm_agent` writes only inside the project agents dir, only for trusted projects, validates names with `assertSafeName` and tool names with a regex, and never overwrites without `overwrite:true`. Never make it write to `~/.pi/agent/agents` (roles are per project, not global).
+- User-facing reference: `docs/CUSTOM-AGENTS.md`. Keep it, the skill (`skills/orchestration/SKILL.md`), the prompt section and README in sync when role behaviour changes.
+
 ## Testing notes
+- `test/helpers.ts` `mkRuntime` sets `customRolesOnly:false` so older e2e tests can use plain agents; enforcement is tested in `test/custom-roles-only.test.ts` and `test/custom-agents.test.ts`. A bare `new Runtime(..., DEFAULT_CONFIG ...)` is strict.
 - `PI_SWARM_PI_BIN=test/fixtures/fake-pi.mjs` swaps in the scripted pi. Directives (`FAIL:`, `COST:`, `SLEEP:`, `WRITE:`, `WRITE_BAD:`, `MSG:`, `DIALOG:`) are documented at the top of that file. Extend the fake when you add protocol features, and keep it faithful to pi's documented JSON/RPC events.
 
 ## Verify before finishing a change

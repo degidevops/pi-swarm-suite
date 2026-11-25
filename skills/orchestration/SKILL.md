@@ -1,11 +1,11 @@
 ---
 name: swarm-orchestration
-description: How to choose and use swarm_delegate, swarm_team and swarm_workflow for parallel multi-agent work (module splits, fan-out audits, dependent tasks, file-ownership scopes, plan approval, gates, independent review, background runs, live messaging, cross-process attach, dashboard, dynamic task creation). Use when a task is large enough to parallelize.
+description: How to define project roles with swarm_agent and how to choose and use swarm_delegate, swarm_team and swarm_workflow for parallel multi-agent work (module splits, fan-out audits, dependent tasks, file-ownership scopes, plan approval, gates, independent review, background runs, live messaging, cross-process attach, dashboard, dynamic task creation). Use when a task is large enough to parallelize.
 ---
 
 # Swarm orchestration
 
-One extension, three tools. Pick by task shape:
+One extension: `swarm_agent` defines the roles, three tools run them. Pick by task shape:
 
 | Situation | Tool |
 |---|---|
@@ -14,8 +14,20 @@ One extension, three tools. Pick by task shape:
 | Many items (files/modules) then reduce / cold-verify; runs that must survive interruption | `swarm_workflow` |
 | One small task | Do it yourself; do not spawn workers |
 
-## Built-in agents (zero setup)
-`reviewer` (read-only code review; ends with `VERDICT: PASS|FAIL`), `researcher` (read-only investigation), `planner` (read-only plan), `oracle` (read-only advice), `worker` (writes code). Pass one as `agent:` per task or teammate. User files in `~/.pi/agent/agents` and project files in `.pi/agents` override built-ins by name.
+## Roles: you build them, per project
+There are no ready-made roles to pick from. The built-ins (`reviewer`, `researcher`, `planner`, `oracle`, `worker`) are **examples only** and are refused by the swarm tools (unless `swarm.json` sets `customRolesOnly: false`). Before delegating, define each role the task needs:
+
+```
+swarm_agent({ action: "define", name: "auth-reviewer", description: "Reviews auth code",
+  tools: ["read","grep","find","ls"],
+  prompt: "You review src/auth for race conditions and security bugs. Never modify files. Cite file:line. End with VERDICT: PASS or VERDICT: FAIL." })
+```
+- Saved to the project's `.pi/agents/<name>.md`, usable immediately as `agent: "auth-reviewer"` in `swarm_delegate`, `swarm_team` teammates and `swarm_workflow` stages. Project-local, never global; commit it to share.
+- Design each role for the task: least-privilege `tools`, a prompt that states scope, limits, and what the final reply must contain, and `tier`/`model` if cost matters.
+- Tool menu: read-only = `read, grep, find, ls`; `bash` runs checks but can also write files, so omit it for a hard read-only role; add `edit, write` for roles that change code (and isolate them: `worktree: true` or `swarm_team`).
+- `swarm_agent action="list"` shows this project's roles (reuse before duplicating); `action="examples"` shows the example roles; `from: "reviewer"` copies one as a starting point; `overwrite: true` replaces a role; `action="remove"` deletes one.
+- One-off `swarm_delegate` task: skip the file and pass `role: "<system prompt>"` and `tools: [...]` on the task.
+- A `reviewer` configured in `swarm.json` must be a project role that ends with `VERDICT: PASS|FAIL`.
 
 If other delegation tools are also installed (e.g. billion-context's `acp_delegate`), prefer the swarm tools: one `swarm_delegate` task covers single-sub-agent use, and only the swarm tools add parallel batches, worktree isolation, scopes, gates, budget and resume. The `<swarm_orchestration>` system-prompt section tells the model this every session; run `/swarm doctor` to check for conflicts.
 
@@ -25,7 +37,7 @@ If other delegation tools are also installed (e.g. billion-context's `acp_delega
 3. Tasks that write files need isolation: `worktree: true` in delegate/workflow, or `swarm_team` (worktrees on by default).
 4. Agents never merge. After a team run, tell the user to review branches and run `/swarm merge <team>`.
 5. Start small (2-4 workers). Check `/swarm cost` before scaling up. A budget stops the run automatically; unfinished tasks stay resumable.
-6. Do not let an author grade its own work: use a read-only reviewer agent, or the configured `reviewer` (auto-reviews each task's diff; FAIL triggers a retry with the findings).
+6. Do not let an author grade its own work: define a read-only reviewer role, or use the configured `reviewer` (auto-reviews each task's diff; FAIL triggers a retry with the findings).
 
 ## /swarm commands
 - `/swarm status <team>` — team status + background jobs

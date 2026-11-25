@@ -1,0 +1,16 @@
+---
+# Copy to .pi/agents/<name>.md (project, trusted only) or ~/.pi/agent/agents/<name>.md (user).
+# `name` and `description` are required; a file missing either is silently skipped.
+# Reusing a built-in's name (reviewer, researcher, planner, oracle, worker) overrides it.
+name: my-role
+description: "One line - what this role is for (shown in /swarm agents)"
+# Tool allowlist, comma list or YAML list. Read-only: read, grep, find, ls
+# (bash runs checks but can also write). Writing: add edit, write.
+# Omit to fall back to workerTools in swarm.json, then pi's defaults.
+tools: read, grep, find, ls
+# lead | worker | cheap — picks models.<tier> from swarm.json. Omitted: cheap if all tools are read-only, else worker.
+tier: cheap
+# model: provider/model   # optional; beats tier
+---
+System prompt goes here. Say what the role does, what it must not do,
+and what the final reply must contain.

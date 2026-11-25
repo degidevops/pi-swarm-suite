@@ -12,6 +12,7 @@ export const DEFAULT_CONFIG: SwarmConfig = {
   gates: [],
   maxAttempts: 2,
   models: {},
+  customRolesOnly: true,
 };
 
 /** Validate untrusted JSON into a partial config. Never throws; reports problems as warnings. */
@@ -105,6 +106,10 @@ export function parseConfig(raw: unknown): { config: Partial<SwarmConfig>; warni
       if (t.session !== undefined && typeof t.session !== "string") warnings.push("tmux.session must be a string");
       config.tmux = { enabled: t.enabled === true, session: typeof t.session === "string" && t.session.trim() ? t.session.trim() : undefined };
     } else warnings.push("tmux must be a boolean or an object { enabled, session }");
+  }
+  if (r.customRolesOnly !== undefined) {
+    if (typeof r.customRolesOnly === "boolean") config.customRolesOnly = r.customRolesOnly;
+    else warnings.push("customRolesOnly must be a boolean");
   }
   if (r.reviewer !== undefined) {
     if (typeof r.reviewer === "string" && r.reviewer.trim()) config.reviewer = r.reviewer.trim();

@@ -153,7 +153,7 @@ function report(code, reason) {
 
   // 1. swarm tools listed?
   const toolsBlock = sawTools;
-  const swarmTools = ["swarm_delegate", "swarm_team", "swarm_workflow"];
+  const swarmTools = ["swarm_agent", "swarm_delegate", "swarm_team", "swarm_workflow"];
   const missingTools = swarmTools.filter((t) => !new RegExp(`^- ${t}:`, "m").test(toolsBlock));
   if (missingTools.length) hard.push(`missing from <tools>: ${missingTools.join(", ")}`);
   else say(`[ok] all three swarm tools listed in <tools> (~${estTokens(toolsBlock)} tokens)`);

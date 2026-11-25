@@ -7,7 +7,7 @@
  * injects a dedicated prompt section: the section is where the model looks for guidance.
  */
 
-export const SWARM_TOOL_NAMES = new Set(["swarm_delegate", "swarm_team", "swarm_workflow"]);
+export const SWARM_TOOL_NAMES = new Set(["swarm_agent", "swarm_delegate", "swarm_team", "swarm_workflow"]);
 
 /** Tools that belong to this extension but are only registered inside team children. */
 const OWN_CHILD_TOOLS = new Set(["team_message", "team_inbox", "team_tasks", "team_task_request"]);
@@ -51,7 +51,19 @@ function coexistenceParagraph(competitors: readonly string[]): string {
 }
 
 /** The full <swarm_orchestration> section body (without the surrounding XML tag). */
-export function buildSwarmSection(competitors: readonly string[]): string {
+export function buildSwarmSection(competitors: readonly string[], customRolesOnly = true): string {
+  const roles = customRolesOnly
+    ? [
+        "Roles — you build them (required):",
+        "- There are no ready-made roles in this project. Before delegating, define each role the task needs with swarm_agent: name, description, tools (least privilege), and a system prompt that states scope, limits and what the final reply must contain. It is saved in this project's .pi/agents/ and then used as `agent` in swarm_delegate, swarm_team and swarm_workflow.",
+        '- For a one-off swarm_delegate task you can skip the file: pass role:"<system prompt>" and tools:[...] on the task.',
+        "- Tool menu: read-only = read, grep, find, ls (bash can run checks but can also write); add edit, write for roles that change code, and isolate those (worktree:true or swarm_team).",
+        '- Examples to adapt (not usable as-is): reviewer, researcher, planner, oracle, worker — see swarm_agent action="examples"; `from:"reviewer"` copies one as a starting point.',
+        "- Reuse: swarm_agent action=list shows this project's roles; check it before defining a duplicate.",
+      ]
+    : [
+        "Roles: built-in agents work with no setup — reviewer (read-only review, ends with VERDICT: PASS or FAIL), researcher (read-only investigation), planner (read-only plan), oracle (read-only advice), worker (makes changes). They are defaults: shape the role to the task with swarm_agent (saved in .pi/agents/, overrides a built-in of the same name) or an inline role/tools on a swarm_delegate task.",
+      ];
   return [
     "SWARM ORCHESTRATION — parallelize work with swarm_delegate / swarm_team / swarm_workflow",
     "",
@@ -61,12 +73,13 @@ export function buildSwarmSection(competitors: readonly string[]): string {
     "- Many items (files/modules) then reduce/verify; runs that must survive interruption → swarm_workflow: fan-out with journaled resume.",
     "- One small task → do it yourself; do not spawn workers.",
     "",
-    "Built-in agents (no setup needed): reviewer (read-only code review, ends with VERDICT: PASS or FAIL), researcher (read-only investigation), planner (read-only plan), oracle (read-only advice), worker (makes changes). Custom agents live in .pi/agents/*.md or ~/.pi/agent/agents/*.md and override built-ins by name.",
+    ...roles,
     "",
     "Example:",
+    'swarm_agent({ action: "define", name: "auth-reviewer", description: "Reviews auth code", tools: ["read", "grep", "find", "ls"], prompt: "You review code for race conditions and security bugs. Never modify files. Cite file:line. End with VERDICT: PASS or VERDICT: FAIL." })',
     'swarm_delegate({ tasks: [',
-    '  { task: "Review src/auth.ts for race conditions; cite file:line, end with VERDICT: PASS or FAIL", agent: "reviewer" },',
-    '  { task: "Find every caller of parseConfig() and summarize the call paths", agent: "researcher" },',
+    '  { task: "Review src/auth.ts for race conditions", agent: "auth-reviewer" },',
+    '  { task: "Find every caller of parseConfig() and summarize the call paths", role: "You trace call paths. Read-only. Cite file:line.", tools: ["read", "grep", "find", "ls"] },',
     "] })",
     "",
     "Rules:",

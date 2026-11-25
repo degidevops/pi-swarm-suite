@@ -18,7 +18,7 @@ const StageSchema = Type.Object({
   template: Type.String({ description: "Prompt. Placeholders: {item} {index} {results} (output of `from` stage) {input}" }),
   items: Type.Optional(Type.Array(Type.String(), { description: "fanout only: the items to fan out over (max 200)" })),
   from: Type.Optional(Type.String({ description: "Earlier stage id whose outputs become {results} (default: previous stage)" })),
-  agent: Type.Optional(Type.String()),
+  agent: Type.Optional(Type.String({ description: "Role name defined with swarm_agent (required when the project uses custom roles)" })),
   model: Type.Optional(Type.String()),
   concurrency: Type.Optional(Type.Number()),
   worktree: Type.Optional(Type.Boolean({ description: "fanout only: run each item in its own git worktree/branch (for write-heavy fan-out). Branches are reported, never merged." })),
@@ -161,7 +161,7 @@ export function workflowTool(getRt: (cwd: string) => Runtime): ToolDefinition<ty
     description:
       "Run a declarative multi-stage workflow: fan out workers over many items in parallel (optionally one git worktree per item), then reduce/verify with a single worker. Every completed step is journaled, so an interrupted run resumes without re-spending tokens (pass runId). background:true returns immediately and notifies you with the result. Best for audits, migrations, large reviews.",
     promptSnippet:
-      'swarm_workflow({ stages: [{ id: "audit", kind: "fanout", items: ["src/a.ts", "src/b.ts"], template: "Audit {item}" }, { id: "report", kind: "single", template: "Summarize: {results}" }] })',
+      'swarm_workflow({ stages: [{ id: "audit", kind: "fanout", agent: "auditor", items: ["src/a.ts", "src/b.ts"], template: "Audit {item}" }, { id: "report", kind: "single", agent: "auditor", template: "Summarize: {results}" }] })',
     promptGuidelines: [
       "Use swarm_workflow for large fan-out (many files/modules) followed by a reduce or cold-verify stage. Fanout workers should be read-only unless the stage sets worktree:true. To resume after an interruption, call again with the same runId.",
     ],

@@ -1,7 +1,7 @@
 # Roadmap
 
 ## Verification status (be honest about this)
-- Typecheck clean; 85 tests pass (unit, real-git worktree/merge/conflict flows, and end-to-end runs against a scripted fake `pi` that speaks pi's documented JSON and RPC protocols).
+- Typecheck clean; 152 tests pass (unit, real-git worktree/merge/conflict flows, and end-to-end runs against a scripted fake `pi` that speaks pi's documented JSON and RPC protocols).
 - Loads in real pi (v1.6.0) in all three roles (parent, teammate child, plain child) and `/swarm` is exposed in real `pi --mode rpc`.
 - **Real-model shakedown:** verified against `nvidia/nemotron-3.5-super-vl-120b-a12b` via `pi install ./`. `swarm_delegate`, `swarm_team action=create`, `swarm_team action=run`, git worktrees/commits/merges all work end-to-end with real model traffic.
 
@@ -27,6 +27,7 @@
 7. ✅ **Cross-process attach** — `src/core/attach.ts`: disk-based team/worker/job state + steer commands under `.pi/swarm/attach/teams/<team>/`. `/swarm attach` lists running teams or shows workers/jobs. `/swarm steer` falls back to disk queue for workers not live in this session; `ensureSteerPolling()` (1s interval) applies pending cross-process steer commands.
 8. ✅ **Per-agent cost breakdown** — `Ledger.perAgent` Map, `snapshotByAgent()`, `agentCost()`; `/swarm cost` shows breakdown by agent when >1 agent has cost.
 9. ✅ **Hooks** — `preHooks`/`postHooks` in `SwarmConfig` and `swarm.json`; run via `runGates` before/after task attempts; transcript entries for hook events.
+12. ✅ **Lead-built project roles** — `swarm_agent` (define/list/examples/remove → `<project>/.pi/agents`), `customRolesOnly` (default true: built-ins and global agents are examples, refused by `Runtime.resolveAgent`), inline `role`/`tools` on `swarm_delegate`, agent files re-read on every resolve. Docs: `docs/CUSTOM-AGENTS.md`. Not yet verified with a real model (does the lead call `swarm_agent` before delegating?): run `scripts/realtest-toolchoice.mjs`.
 10. ⬜ **Windows** support (gates use the shell; worktree paths untested).
 11. ⬜ **Publish**: repository URL (done — https://github.com/degidevops/pi-swarm-suite.git), `pi-package` listing, semver policy, pin minimum pi version after real-model tests.
 
