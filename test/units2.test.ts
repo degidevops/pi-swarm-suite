@@ -10,6 +10,7 @@ import { getPiInvocation } from "../src/core/child.ts";
 import { pickTier, Runtime, type WorkerInfo } from "../src/runtime.ts";
 import { registerChildTools } from "../src/child-tools.ts";
 import { Mailbox } from "../src/core/mailbox.ts";
+import { ActivityTracker } from "../src/core/monitor.ts";
 import { TaskStore } from "../src/core/tasks.ts";
 
 describe("scope", () => {
@@ -259,6 +260,7 @@ describe("Live widget visibility", () => {
   const mkRt = () => new Runtime(process.cwd(), { ...DEFAULT_CONFIG, models: {} }, true, 0);
   const w = (id: number, status: WorkerInfo["status"], last: string, startedAt = Date.now() - 10_000, endedAt?: number): WorkerInfo => ({
     id, label: `web-team/agent${id}#${id}`, status, startedAt, endedAt, last, steerable: status === "running",
+    tracker: new ActivityTracker(), health: "active",
   });
 
   it("hides finished workers: whole widget collapses once the swarm settles", () => {

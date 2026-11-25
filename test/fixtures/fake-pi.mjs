@@ -6,6 +6,7 @@
 //   SLEEP:<ms>            work for a while (steerable in RPC mode)
 //   WRITE:<path>=<text>   write a file in cwd
 //   WRITE_BAD:<path>=<t>  write on first attempt; delete on a retry (prompt contains "did not pass")
+//   CHATTER:<ms>          run a visible tool for a while, emitting tool_execution_* events (active, not silent)
 //   MSG:<to>|<text>       drop a mailbox message (what the team_message tool does); to=@self -> own inbox
 import fs from "node:fs";
 import path from "node:path";
@@ -51,6 +52,12 @@ async function act(task, steers, isAborted) {
     fs.mkdirSync(path.join(teamDir, "inbox"), { recursive: true });
     fs.appendFileSync(path.join(teamDir, "inbox", `${target}.jsonl`), JSON.stringify({ id: "x", from: mate, to: target, text, ts: new Date().toISOString() }) + "\n");
   }
+  for (const [, ms] of m(/^CHATTER:(\d+)/gm)) {
+    out({ type: "tool_execution_start", toolCallId: "t1", toolName: "bash", args: { command: "build" } });
+    const end = Date.now() + Number(ms);
+    while (Date.now() < end && !isAborted()) { out({ type: "tool_execution_update", toolCallId: "t1", toolName: "bash", args: {}, partialResult: { content: [{ type: "text", text: "tick" }] } }); await sleep(50); }
+    out({ type: "tool_execution_end", toolCallId: "t1", toolName: "bash", result: { content: [] }, isError: false, durationMs: Number(ms) });
+  }
   for (const [, ms] of m(/^SLEEP:(\d+)/gm)) { const end = Date.now() + Number(ms); while (Date.now() < end && !isAborted()) await sleep(40); }
   const fail = task.match(/^FAIL:(.*)$/m);
   if (fail) return { text: "", cost, error: fail[1] };
@@ -79,6 +86,8 @@ if (mode === "rpc") {
       running = false;
       if (!aborted) { out(assistant(r.text, r.cost, r.error)); out({ type: "agent_end", messages: [], willRetry: false }); }
       out({ type: "agent_settled", aborted });
+    } else if (cmd.type === "get_state") {
+      out({ id: cmd.id, type: "response", command: "get_state", success: true, data: { isStreaming: running, isCompacting: false, pendingMessageCount: 0 } });
     } else if (cmd.type === "steer") {
       steers.push(cmd.message);
       out({ id: cmd.id, type: "response", command: "steer", success: true, data: { disposition: "queued" } });

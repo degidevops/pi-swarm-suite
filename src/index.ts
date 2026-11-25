@@ -21,7 +21,12 @@ const CHILD_FLAG = Symbol.for("pi-swarm-suite.child-tools");
 const SECTION_KEY = "swarm_orchestration";
 
 const HELP = [
-  "/swarm status               running workers, jobs, cost",
+  "/swarm status               running workers (phase, idle time, health), jobs, cost",
+  "/swarm monitor              watchdog settings + health of every running worker",
+  "/swarm open [label]         inspect one worker: state, what it is doing, log tail, how to follow it",
+  "/swarm say <label> <text>   talk to a running worker (same as steer; RPC/team workers)",
+  "/swarm kill <label>         stop one stuck worker (reported as failed, so team tasks retry)",
+  "/swarm tmux [on|off|kill]   one tmux window per worker + a monitor window (tmux attach -t swarm-<project>)",
   "/swarm jobs                 background jobs (team/workflow runs)",
   "/swarm cost | reset-cost    token/cost totals | clear the ledger",
   "/swarm doctor               environment diagnosis (tools, agents, config, conflicts)",
@@ -119,6 +124,24 @@ export default function swarmSuite(pi: ExtensionAPI): void {
     }
   };
 
+  /**
+   * Worker health alerts. The user always sees them; the lead agent is also told when a worker was stopped
+   * as stalled (so it can re-plan or steer) — "quiet" is only a warning and stays out of the model's context.
+   */
+  const notifyAlert = (a: { kind: "quiet" | "stalled" | "recovered"; label: string; text: string }) => {
+    try {
+      uiCtx?.ui.notify(`swarm: ${a.text}`, a.kind === "recovered" ? "info" : "warning");
+    } catch {
+      /* ui may be gone */
+    }
+    if (a.kind !== "stalled") return;
+    try {
+      pi.sendMessage({ customType: "swarm-alert", content: `[swarm monitor] ${a.text}`, display: true, details: { label: a.label, kind: a.kind } }, { triggerTurn: false, deliverAs: "followUp" });
+    } catch {
+      /* best-effort */
+    }
+  };
+
   const build = (ctx: ExtensionContext): Runtime => {
     const trusted = ctx.isProjectTrusted();
     const { config, warnings } = loadConfig(ctx.cwd, trusted);
@@ -128,6 +151,7 @@ export default function swarmSuite(pi: ExtensionAPI): void {
     if (ctx.model) runtime.sessionModel = `${ctx.model.provider}/${ctx.model.id}`;
     runtime.onChange = refreshWidget;
     runtime.onJobDone = notifyJob;
+    runtime.onAlert = notifyAlert;
     if (warnings.length) ctx.ui.notify(`swarm: ${warnings.join("; ")}`, "warning");
     return runtime;
   };
@@ -179,7 +203,7 @@ export default function swarmSuite(pi: ExtensionAPI): void {
   pi.registerCommand("swarm", {
     description: "Swarm suite: status | jobs | cost | doctor | agents | teams | tasks | log | steer | merge | stop",
     getArgumentCompletions: (prefix) => {
-      const subs = ["status", "jobs", "cost", "reset-cost", "doctor", "agents", "teams", "tasks", "log", "steer", "merge", "board", "tail", "attach", "stop", "help"];
+      const subs = ["status", "monitor", "open", "say", "kill", "tmux", "jobs", "cost", "reset-cost", "doctor", "agents", "teams", "tasks", "log", "steer", "merge", "board", "tail", "attach", "stop", "help"];
       const hits = subs.filter((s) => s.startsWith(prefix.trim()));
       return hits.length ? hits.map((s) => ({ value: s, label: s })) : null;
     },
@@ -194,6 +218,63 @@ export default function swarmSuite(pi: ExtensionAPI): void {
             // Full view: includes recently finished workers (the live widget hides them).
             const lines = runtime.statusLines();
             say(lines.length ? lines.join("\n") : "swarm: idle");
+            break;
+          }
+          case "monitor": {
+            say(runtime.monitorLines().join("\n"));
+            break;
+          }
+          case "open": {
+            if (!rest[0]) {
+              const all = [...runtime.workers.values()].reverse();
+              say(
+                all.length
+                  ? `Workers (newest first) — /swarm open <label>:\n${all.map((w) => `${w.status === "running" ? "●" : "○"} ${w.label}${w.logPath ? `\n    ${w.logPath}` : ""}`).join("\n")}`
+                  : "No workers yet in this session.",
+              );
+              break;
+            }
+            const card = runtime.inspect(rest[0]);
+            say(card ?? `no worker matching "${rest[0]}". Try /swarm open to list them.`, card ? "info" : "warning");
+            break;
+          }
+          case "say": {
+            const [label, ...words] = rest;
+            if (!label || !words.length) throw new Error(`usage: /swarm say <label> <text>. Live: ${runtime.steerableLabels().join(", ") || "(none)"}`);
+            const w = runtime.findWorker(label);
+            const text = words.join(" ");
+            if (w && w.status === "running" && runtime.steer(w.label, text)) say(`sent to ${w.label}`, "info");
+            else if (w && w.status === "running" && !w.steerable) say(`${w.label} is a one-shot worker and cannot be steered; use /swarm kill ${w.label} if it is stuck.`, "warning");
+            else if (runtime.steer(label, text)) say(`sent to ${label}`, "info");
+            else {
+              const team = label.split("/")[0];
+              if (team && runtime.steerCrossProcess(team, label, text)) say(`queued for ${label} (picked up by the session that runs it)`, "info");
+              else say(`no running steerable worker "${label}"`, "warning");
+            }
+            break;
+          }
+          case "kill": {
+            if (!rest[0]) throw new Error("usage: /swarm kill <label>");
+            say(runtime.killWorker(rest[0]) ? `stopping ${rest[0]} (reported as failed)` : `no running worker "${rest[0]}"`, "info");
+            break;
+          }
+          case "tmux": {
+            const arg = rest[0] ?? "status";
+            if (arg === "on" || arg === "off") {
+              const r = runtime.setTmux(arg === "on");
+              say(r.message, r.ok ? "info" : "warning");
+            } else if (arg === "kill") {
+              say(runtime.tmux.killSession() ? "tmux session removed." : "no tmux session to remove.", "info");
+            } else {
+              const t = runtime.tmux;
+              const wins = t.listWindows();
+              say(
+                [
+                  `tmux: ${t.available() ? "found" : "NOT found on PATH"} · integration ${t.enabled ? "on" : "off"} · session ${t.session}${wins.length ? ` (${wins.length} windows: ${wins.join(", ")})` : ""}`,
+                  t.enabled ? `watch in another terminal: ${t.attachCommand()}` : "enable with /swarm tmux on, or set { \"tmux\": true } in swarm.json",
+                ].join("\n"),
+              );
+            }
             break;
           }
           case "jobs": {
@@ -357,7 +438,9 @@ export default function swarmSuite(pi: ExtensionAPI): void {
                 const icon = w.status === "running" ? "●" : w.status === "ok" ? "✓" : "✗";
                 const steerMark = w.steerable ? " ⇄" : "";
                 const last = w.last ? ` · ${w.last}` : "";
-                out.push(`  ${icon} ${w.label}${steerMark} ${w.status}${last}`);
+                const mon = w.status === "running" && w.health ? ` · ${w.health}${w.phase ? ` (${w.phase})` : ""}${w.lastActivityAt ? ` · last activity ${Math.round((Date.now() - w.lastActivityAt) / 1000)}s ago` : ""}` : "";
+                out.push(`  ${icon} ${w.label}${steerMark} ${w.status}${mon}${last}`);
+                if (w.logPath) out.push(`      log: tail -F '${w.logPath}'`);
               }
             } else {
               out.push("Workers: (none)");

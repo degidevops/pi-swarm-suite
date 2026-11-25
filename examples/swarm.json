@@ -15,5 +15,14 @@
     "worker": "provider/mid-model",
     "cheap": "provider/fast-model"
   },
-  "reviewer": "reviewer"
+  "reviewer": "reviewer",
+  "monitor": {
+    "idleWarnSec": 60,
+    "idleKillSec": 300,
+    "slowPhaseFactor": 3,
+    "maxWorkerSec": 0,
+    "probe": true,
+    "nudge": false
+  },
+  "tmux": false
 }

@@ -1,3 +1,6 @@
+import type { MonitorConfig } from "./core/monitor.ts";
+import type { TmuxConfig } from "./core/tmux.ts";
+
 export type Tier = "lead" | "worker" | "cheap";
 
 export interface Usage {
@@ -69,4 +72,8 @@ export interface SwarmConfig {
   workerTools?: string[];
   /** Agent name that independently reviews each team task's diff before it counts as done. */
   reviewer?: string;
+  /** Worker activity monitor / stall watchdog. Missing keys fall back to DEFAULT_MONITOR. */
+  monitor?: Partial<MonitorConfig>;
+  /** Open one tmux window per worker (live log) plus a monitor window. Off by default. */
+  tmux?: TmuxConfig;
 }

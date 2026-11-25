@@ -38,6 +38,9 @@ core: tasks (file-per-task, lock) · mailbox (JSONL) · journal (JSONL replay) �
 | `src/core/agents.ts` | agent definition loading: `BUILT_IN_AGENTS` (reviewer/researcher/planner/oracle/worker, zero-setup) + discovery of user (`~/.pi/agent/agents`) and project (`.pi/agents`, trusted only) files; later sources override built-ins by name. |
 | `src/core/prompt.ts` | model-visibility layer: `buildSwarmSection` (the `<swarm_orchestration>` prompt body), `detectCompetitorTools` (finds acp_delegate & friends in the active tool list), `summarizeCompetitors`, `SWARM_TOOL_NAMES`. |
 | `src/core/doctor.ts` | `/swarm doctor` report: active tools, competing delegate tools + per-package opt-out advice, agents by source, config, git, budget. |
+| `src/core/monitor.ts` | `ActivityTracker` (event stream → phase: waiting/thinking/writing/tool/retrying/compacting), `assess()` (active/quiet/stalled, phase-aware thresholds), `describePhase`, `describeProbe`. Pure; clock injected. |
+| `src/core/worklog.ts` | `WorkLog` — per-worker live log `.pi/swarm/workers/<run>/<label>.log` (+ `.done` marker), `tailLog`, `pruneOldRuns`, status snapshot path for tmux. |
+| `src/core/tmux.ts` | `TmuxManager` — detached session `swarm-<project>`, `monitor` window + one viewer window per worker (`tail -F` until `.done`, then a shell in the worker's cwd). Argv-only, injectable exec, best-effort. |
 | `src/core/ledger.ts` | `Ledger` — tokens/cost, `perAgent` breakdown, `snapshotByAgent()`, `agentCost()`. |
 | `src/core/pool.ts` | concurrency pool. |
 | `src/core/transcript.ts` | `appendTranscript`, `readTranscript` — JSONL per task for post-mortems. |
@@ -71,6 +74,9 @@ Team children get `PI_SWARM_TEAM_DIR`/`PI_SWARM_MATE` and `-e <this extension>`;
 - Gate failure or worker failure ⇒ retry (≤ `maxAttempts`) with the failure text injected; then `failed`, dependents become `blocked`.
 - Abort/budget stop ⇒ task returns to `pending`; calling `run` again resumes (`resetStale` also recovers crashed runs).
 - Merge is human-only: `/swarm merge <team>`. On conflict, `mergeTeam` creates a scratch worktree, resolves with theirs, commits, merges back into current branch.
+
+## Monitoring and stall watchdog
+`Runtime.run()` creates, per worker: an `ActivityTracker` (fed by `WorkerOptions.onEvent` — every parsed JSON/RPC event except command responses, so a `get_state` reply never makes a hung worker look alive), a `WorkLog`, an `AbortController`, and a watchdog interval (`monitor.tickMs`). Each tick `assess()` yields active/quiet/stalled. Silent phases (running tool, waiting for the model, retry back-off, compaction) get thresholds × `slowPhaseFactor`. For RPC workers a quiet worker is probed with `get_state` (`RpcWorker.probe()`); the answer distinguishes a hung process from a slow model/tool and is stored in the log and in the kill reason. On `stalled` the worker is aborted via its controller and the result is rewritten from `aborted` to **`failed: stalled …`** — `team.ts` treats `aborted` as "park the task as pending" but `failed` as "retry with the failure text", which is what a stall should do. `/swarm kill` uses the same path (`failed: killed …`). `Runtime.onAlert` fires for quiet/stalled/recovered; the extension notifies the user and, for `stalled`, sends a `swarm-alert` message to the lead agent. Monitor fields (`health`, `phase`, `lastActivityAt`, `logPath`) are also persisted into the attach state so `/swarm attach` from another session shows them.
 
 ## Background jobs
 `background: true` runs `runTeam`/`runWorkflow` as a `Runtime` job with its own AbortController (stopped by `/swarm stop <id>` or `abortAll`). When it settles, `pi.sendMessage(..., {triggerTurn:true, deliverAs:"followUp"})` wakes the lead with the result. Jobs die with the pi process; task/journal state persists so calling `run` again resumes.

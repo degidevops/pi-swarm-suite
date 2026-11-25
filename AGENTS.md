@@ -46,5 +46,8 @@ A single pi extension that provides three orchestration modes behind one runtime
 ## Verify before finishing a change
 `npm run check` passes. If you touched `worker.ts`, `runtime.ts`, `attach.ts` or the tools, also smoke-load in real pi (see docs/ARCHITECTURE.md "Smoke test") and say what you could not test.
 
+## Monitoring / tmux (v0.4.0)
+`src/core/monitor.ts` (pure state machine + assess), `src/core/worklog.ts` (per-worker live log), `src/core/tmux.ts` (viewer windows). Wired in `Runtime.run()` via `WorkerOptions.onEvent/onStderr`; `RpcWorker.probe()` sends `get_state`. A watchdog kill is reported as `failed` (never `aborted`) so team retries work. Commands: `/swarm monitor|open|say|kill|tmux`. Tests: `test/monitor.test.ts` (fake pi has `CHATTER:<ms>` and answers `get_state`).
+
 ## Not done yet
 See docs/ROADMAP.md. Remaining items: Windows support (#10, untested), publish (#11, semver policy, pin minimum pi version). Real-model shakedown (#1) is complete — verified against `nvidia/nemotron-3.5-super-vl-120b-a12b`.

@@ -65,6 +65,12 @@ export interface WorkerAttachInfo {
   last: string;
   steerable: boolean;
   sessionDir?: string;
+  /** Monitor verdict for running workers (active | quiet | stalled). */
+  health?: string;
+  /** What the worker is doing right now, e.g. `tool:bash 45s`. */
+  phase?: string;
+  lastActivityAt?: number;
+  logPath?: string;
 }
 
 export interface JobAttachInfo {

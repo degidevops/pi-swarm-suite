@@ -21,6 +21,10 @@ export interface WorkerOptions {
   sessionDir?: string;
   onUsage?: (delta: Partial<Usage>) => void;
   onProgress?: (line: string) => void;
+  /** Every parsed event the child emits (JSON mode: all records; RPC mode: all except command responses). */
+  onEvent?: (ev: unknown) => void;
+  /** Raw stderr chunks from the child. */
+  onStderr?: (chunk: string) => void;
 }
 
 type Json = Record<string, unknown>;
@@ -115,7 +119,9 @@ export async function runWorkerProcess(opts: WorkerOptions): Promise<WorkerResul
       const line = (raw: string) => {
         if (!raw.trim()) return;
         try {
-          col.feed(JSON.parse(raw));
+          const ev = JSON.parse(raw);
+          opts.onEvent?.(ev);
+          col.feed(ev);
         } catch {
           /* non-JSON noise */
         }
@@ -133,6 +139,7 @@ export async function runWorkerProcess(opts: WorkerOptions): Promise<WorkerResul
       });
       proc.stderr?.on("data", (d) => {
         stderr += d.toString();
+        opts.onStderr?.(d.toString());
       });
       proc.on("error", (e) => done({ code: null, spawnError: e }));
       proc.on("close", (code) => {

@@ -3,6 +3,7 @@ import { type WorkerResult, emptyUsage } from "../types.ts";
 import { type WorkerOptions, Collector, isObj } from "./worker.ts";
 import { prepareChild } from "./child.ts";
 import { sleep, tail } from "./util.ts";
+import type { ProbeResult } from "./monitor.ts";
 
 /**
  * Long-lived worker over `pi --mode rpc`. Unlike the one-shot JSON worker it can be
@@ -19,6 +20,8 @@ export class RpcWorker {
   private stderr = "";
   private closed: Promise<void> = Promise.resolve();
   private cleanup: () => Promise<void> = async () => undefined;
+  private probeSeq = 0;
+  private readonly probes = new Map<string, (data: Record<string, unknown>) => void>();
 
   private constructor(private readonly opts: WorkerOptions) {
     this.col = new Collector(opts.onUsage, opts.onProgress);
@@ -56,6 +59,7 @@ export class RpcWorker {
     });
     proc.stderr?.on("data", (d) => {
       this.stderr += d.toString();
+      this.opts.onStderr?.(d.toString());
     });
     proc.stdin?.on("error", () => undefined); // EPIPE after the child exits is expected
     proc.on("error", (e) => void this.finish("failed", `spawn failed: ${e.message}`));
@@ -79,12 +83,21 @@ export class RpcWorker {
     }
     if (!isObj(ev)) return;
     if (ev.type === "response") {
+      if (ev.command === "get_state" && typeof ev.id === "string") {
+        const cb = this.probes.get(ev.id);
+        if (cb) {
+          this.probes.delete(ev.id);
+          cb(isObj(ev.data) ? ev.data : {});
+        }
+        return;
+      }
       if (ev.command === "prompt") {
         if (ev.success === false) void this.finish("failed", typeof ev.error === "string" ? ev.error : "prompt rejected");
         else if (isObj(ev.data) && ev.data.disposition === "handled") void this.finish("failed", "prompt was handled by an extension; no agent run started");
       }
       return;
     }
+    this.opts.onEvent?.(ev); // everything except command responses counts as proof of life
     if (ev.type === "extension_ui_request") {
       // A headless worker has nobody to answer dialogs from other extensions: cancel instead of hanging forever.
       const method = ev.method;
@@ -107,6 +120,38 @@ export class RpcWorker {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Ask the child for its state. A child whose event loop is alive answers within milliseconds even when
+   * it is busy waiting on the model or a tool, so a missing answer means the process itself is hung.
+   * The reply is deliberately NOT forwarded to `onEvent`: probing must not make a hung worker look active.
+   */
+  probe(timeoutMs = 5000): Promise<ProbeResult> {
+    if (this.settled) return Promise.resolve({ responsive: false, at: Date.now() });
+    const id = `probe-${++this.probeSeq}`;
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.probes.delete(id);
+        resolve({ responsive: false, at: Date.now() });
+      }, timeoutMs);
+      timer.unref?.();
+      this.probes.set(id, (d) => {
+        clearTimeout(timer);
+        resolve({
+          responsive: true,
+          isStreaming: typeof d.isStreaming === "boolean" ? d.isStreaming : undefined,
+          isCompacting: typeof d.isCompacting === "boolean" ? d.isCompacting : undefined,
+          pendingMessageCount: typeof d.pendingMessageCount === "number" ? d.pendingMessageCount : undefined,
+          at: Date.now(),
+        });
+      });
+      if (!this.send({ id, type: "get_state" })) {
+        clearTimeout(timer);
+        this.probes.delete(id);
+        resolve({ responsive: false, at: Date.now() });
+      }
+    });
   }
 
   /** Inject a new instruction; pi delivers it before the worker's next model call. */

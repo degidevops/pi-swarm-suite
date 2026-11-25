@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { SwarmConfig } from "../types.ts";
+import type { MonitorConfig } from "./monitor.ts";
 
 export const HARD_MAX_CONCURRENCY = 16;
 
@@ -67,6 +68,44 @@ export function parseConfig(raw: unknown): { config: Partial<SwarmConfig>; warni
     if (Array.isArray(r.workerTools) && r.workerTools.every((t) => typeof t === "string")) config.workerTools = r.workerTools as string[];
     else warnings.push("workerTools must be an array of strings");
   }
+  if (r.monitor !== undefined) {
+    if (typeof r.monitor === "object" && r.monitor !== null && !Array.isArray(r.monitor)) {
+      const m = r.monitor as Record<string, unknown>;
+      const out: Partial<MonitorConfig> = {};
+      // seconds-valued numbers: >= 0 (0 disables); fractional values are allowed (tests use sub-second timings)
+      for (const k of ["idleWarnSec", "idleKillSec", "maxWorkerSec"] as const) {
+        if (m[k] === undefined) continue;
+        if (typeof m[k] === "number" && Number.isFinite(m[k] as number) && (m[k] as number) >= 0) out[k] = m[k] as number;
+        else warnings.push(`monitor.${k} must be a number >= 0 (0 disables)`);
+      }
+      if (m.slowPhaseFactor !== undefined) {
+        if (typeof m.slowPhaseFactor === "number" && m.slowPhaseFactor >= 1) out.slowPhaseFactor = Math.min(m.slowPhaseFactor, 20);
+        else warnings.push("monitor.slowPhaseFactor must be a number >= 1");
+      }
+      if (m.tickMs !== undefined) {
+        if (typeof m.tickMs === "number" && m.tickMs >= 20) out.tickMs = Math.floor(m.tickMs);
+        else warnings.push("monitor.tickMs must be a number >= 20");
+      }
+      for (const k of ["probe", "nudge"] as const) {
+        if (m[k] === undefined) continue;
+        if (typeof m[k] === "boolean") out[k] = m[k] as boolean;
+        else warnings.push(`monitor.${k} must be a boolean`);
+      }
+      if (out.idleWarnSec && out.idleKillSec && out.idleKillSec <= out.idleWarnSec) {
+        warnings.push("monitor.idleKillSec should be larger than idleWarnSec");
+      }
+      config.monitor = out;
+    } else warnings.push("monitor must be an object");
+  }
+  if (r.tmux !== undefined) {
+    if (typeof r.tmux === "boolean") config.tmux = { enabled: r.tmux };
+    else if (typeof r.tmux === "object" && r.tmux !== null && !Array.isArray(r.tmux)) {
+      const t = r.tmux as Record<string, unknown>;
+      if (t.enabled !== undefined && typeof t.enabled !== "boolean") warnings.push("tmux.enabled must be a boolean");
+      if (t.session !== undefined && typeof t.session !== "string") warnings.push("tmux.session must be a string");
+      config.tmux = { enabled: t.enabled === true, session: typeof t.session === "string" && t.session.trim() ? t.session.trim() : undefined };
+    } else warnings.push("tmux must be a boolean or an object { enabled, session }");
+  }
   if (r.reviewer !== undefined) {
     if (typeof r.reviewer === "string" && r.reviewer.trim()) config.reviewer = r.reviewer.trim();
     else warnings.push("reviewer must be an agent name string");
@@ -101,7 +140,12 @@ export function loadConfig(cwd: string, projectTrusted: boolean): { config: Swar
     if (value === undefined) continue;
     const parsed = parseConfig(value);
     warnings.push(...parsed.warnings.map((w) => `${file}: ${w}`));
-    merged = { ...merged, ...parsed.config, models: { ...merged.models, ...(parsed.config.models ?? {}) } };
+    merged = {
+      ...merged,
+      ...parsed.config,
+      models: { ...merged.models, ...(parsed.config.models ?? {}) },
+      monitor: { ...(merged.monitor ?? {}), ...(parsed.config.monitor ?? {}) },
+    };
   }
   return { config: merged, warnings };
 }

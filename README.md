@@ -53,6 +53,30 @@ You do NOT have to uninstall billion-context to use pi-swarm-suite: its compress
 2. **pi-headless** — installs real pi, loads the extension (`-e` AND via `pi install ./`), and asserts what the model would see: tools listed, snippets are examples, `<swarm_orchestration>` injected, and coexistence with billion-context detected. Uses `scripts/diagnose-prompt.mjs` — no API token required.
 3. **pi-realtest** — the actual tool-choice battle with a real model (billion-context installed alongside). Needs repo secrets `PI_TEST_API_KEY` + vars `PI_TEST_PROVIDER`, `PI_TEST_MODEL`; skips gracefully when absent. Run it locally too: `PI_TEST_PROVIDER=openrouter PI_TEST_MODEL=openrouter/auto PI_TEST_API_KEY=... node scripts/realtest-toolchoice.mjs`.
 
+## Monitoring, stuck workers and tmux
+
+A worker that is silent for a while is ambiguous: waiting on a slow model, running a long tool, or hung. Every worker is now watched from its event stream:
+
+| What you see | Meaning |
+|---|---|
+| `● w ⇄ 312s  tool:bash 45s · idle 4s` | running; currently in the `bash` tool for 45 s; last event 4 s ago |
+| `⚠` + `quiet` | no events for `idleWarnSec` (slow phases — tool, waiting for model, retry, compaction — get ×`slowPhaseFactor` slack) |
+| `✖` + `stalled` | no events for `idleKillSec`: the worker is stopped and reported as **failed** (`stalled: …`), so team mode retries it with the reason injected |
+
+For RPC (team) workers a quiet worker is also asked `get_state`: the log then says whether the *process answered* (just slow / blocked in a tool) or did **not** answer (hung). Honest limit: this detects and recovers from stalls, it cannot prevent them. A quiet-for-minutes build that prints nothing needs a larger `idleKillSec` (or `slowPhaseFactor`).
+
+Commands: `/swarm monitor` (health table), `/swarm open [label]` (state, what it is doing, log tail, how to follow it), `/swarm say <label> <text>` (talk to a running RPC worker; one-shot workers cannot be steered), `/swarm kill <label>`, `/swarm tmux [on|off|kill]`. When a worker is stopped as stalled the **lead agent is told** (a `swarm-alert` message) so it can re-plan; "quiet" only warns you.
+
+Every worker writes a live log to `.pi/swarm/workers/<run>/<label>.log` (newest 20 runs kept): `tail -F` it from any terminal. With tmux on, each worker also gets its own window in a detached session — `tmux attach -t swarm-<project>`: a `monitor` window with the status table, plus one window per worker following its log; when the worker ends the window drops into a shell in the worker's working directory (its worktree for team tasks). Windows are viewers only: closing them never kills a worker.
+
+```json
+{
+  "monitor": { "idleWarnSec": 60, "idleKillSec": 300, "slowPhaseFactor": 3, "maxWorkerSec": 0, "probe": true, "nudge": false },
+  "tmux": true
+}
+```
+(`0` disables a threshold. `nudge: true` sends a status steer to a quiet worker that is idle between calls — best effort.)
+
 ## How it compares (honest)
 **On par / modelled on Claude Code:** parallel subagents; lead + teammates with shared task list and dependencies; teammates messaging each other and the lead; plan approval; background runs that notify the lead; steering a running worker; worktree isolation; custom agent files.
 **Beyond what Claude Code offers:** file-ownership scopes enforced per task; independent reviewer gate on the actual diff; hard cost budget that stops runs and keeps them resumable; journaled workflow resume (no re-spend); per-item worktree fan-out; automatic cheap-tier routing for read-only agents; any model/provider pi supports; merging only by a human command; cross-process attach; dashboard TUI; dynamic task creation; per-agent cost breakdown; transcript persistence.
@@ -94,7 +118,7 @@ mkdir -p ~/.pi/agent/agents && cp examples/agents/*.md ~/.pi/agent/agents/   # y
 cp examples/swarm.json ~/.pi/agent/swarm.json     # global config; or <repo>/.pi/swarm.json (trusted projects only)
 ```
 Diagnose your environment any time with `/swarm doctor` (inside pi) or `node scripts/diagnose-prompt.mjs` (headless, no token).
-`swarm.json` (all keys optional): `maxConcurrency` (cap 16), `budgetUsd`, `worktrees`, `gates` (shell commands that must pass), `maxAttempts`, `reviewer` (agent that reviews each task's diff), `models.{lead,worker,cheap}`, `workerTools`, `preHooks`, `postHooks`. Agent files take `name`, `description`, `tools`, `model`, `tier: lead|worker|cheap`.
+`swarm.json` (all keys optional): `maxConcurrency` (cap 16), `budgetUsd`, `worktrees`, `gates` (shell commands that must pass), `maxAttempts`, `reviewer` (agent that reviews each task's diff), `models.{lead,worker,cheap}`, `workerTools`, `preHooks`, `postHooks`, `monitor.{idleWarnSec,idleKillSec,slowPhaseFactor,maxWorkerSec,probe,nudge,tickMs}`, `tmux` (`true` or `{enabled, session}`). Agent files take `name`, `description`, `tools`, `model`, `tier: lead|worker|cheap`.
 
 ## Typical session
 ```
