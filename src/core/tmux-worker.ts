@@ -189,4 +189,3 @@ export class TmuxWorker {
     this.resolveResult({ ...base, status: "ok" });
   }
 }
-
