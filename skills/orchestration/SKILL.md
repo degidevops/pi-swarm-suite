@@ -72,3 +72,6 @@ Stages run in order. `fanout` = one worker per item (parallel; `worktree: true` 
 - `/swarm tail <team> [taskId]` — read per-task transcripts or session logs.
 - Pre/post-task hooks via `swarm.json` `preHooks`/`postHooks`.
 - Per-agent cost breakdown via `/swarm cost`.
+
+## Team as an organisation (v0.5)
+When you create a `swarm_team`, give teammates structure so they coordinate like a real team: `title`, `role` (what they are responsible for), `reportsTo` (another teammate or `lead` — builds an escalation chain, e.g. two engineers reporting to a tech lead who reports to you) and `owns` (file globs). Teammates then use `team_ask` (ask and wait), `team_message kind=blocker|handoff|question`, `team_directory` and `team_decide` on their own; watch for `[swarm team]` messages and answer with `swarm_team action=message to=<name> kind=answer`. Prefer a small chain of command (≤ 2 levels) over everyone reporting to you.

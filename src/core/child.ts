@@ -20,6 +20,8 @@ export interface ChildSpec {
   env?: Record<string, string>;
   /** When set, the child pi persists its session under this directory (ROADMAP #3). */
   sessionDir?: string;
+  /** Interactive (tui) children only: trust project-local resources without asking. */
+  approve?: boolean;
 }
 
 /** Locate the running pi so children use the same binary/version. Pattern from pi's official subagent example. */
@@ -45,8 +47,10 @@ export interface PreparedChild {
 }
 
 /** Build the command line for a child pi. `json` = one-shot print mode; `rpc` = long-lived, steerable. */
-export async function prepareChild(mode: "json" | "rpc", spec: ChildSpec, task?: string): Promise<PreparedChild> {
-  const args = mode === "json" ? ["--mode", "json", "-p"] : ["--mode", "rpc"];
+export async function prepareChild(mode: "json" | "rpc" | "tui", spec: ChildSpec, task?: string): Promise<PreparedChild> {
+  // "tui" = no --mode flag: a real interactive pi that needs a terminal (a tmux window).
+  const args = mode === "json" ? ["--mode", "json", "-p"] : mode === "rpc" ? ["--mode", "rpc"] : [];
+  if (mode === "tui") args.push(spec.approve ? "--approve" : "--no-approve");
   if (spec.sessionDir) {
     args.push("--session-dir", spec.sessionDir);
   } else {
@@ -64,7 +68,7 @@ export async function prepareChild(mode: "json" | "rpc", spec: ChildSpec, task?:
     await fs.promises.writeFile(file, spec.systemPrompt, { encoding: "utf-8", mode: 0o600 });
     args.push("--append-system-prompt", file);
   }
-  if (mode === "json") {
+  if (mode === "json" || mode === "tui") {
     const t = task ?? "";
     args.push(`Task: ${t.length > 60_000 ? `${t.slice(0, 60_000)}\n…[task truncated]` : t}`);
   }

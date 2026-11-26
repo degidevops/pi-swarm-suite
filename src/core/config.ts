@@ -104,8 +104,13 @@ export function parseConfig(raw: unknown): { config: Partial<SwarmConfig>; warni
       const t = r.tmux as Record<string, unknown>;
       if (t.enabled !== undefined && typeof t.enabled !== "boolean") warnings.push("tmux.enabled must be a boolean");
       if (t.session !== undefined && typeof t.session !== "string") warnings.push("tmux.session must be a string");
-      config.tmux = { enabled: t.enabled === true, session: typeof t.session === "string" && t.session.trim() ? t.session.trim() : undefined };
-    } else warnings.push("tmux must be a boolean or an object { enabled, session }");
+      if (t.layout !== undefined && t.layout !== "windows" && t.layout !== "tiled") warnings.push('tmux.layout must be "windows" or "tiled"');
+      config.tmux = {
+        enabled: t.enabled === true,
+        session: typeof t.session === "string" && t.session.trim() ? t.session.trim() : undefined,
+        layout: t.layout === "tiled" ? "tiled" : "windows",
+      };
+    } else warnings.push("tmux must be a boolean or an object { enabled, session, layout }");
   }
   if (r.customRolesOnly !== undefined) {
     if (typeof r.customRolesOnly === "boolean") config.customRolesOnly = r.customRolesOnly;

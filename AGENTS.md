@@ -53,6 +53,12 @@ A single pi extension that provides three orchestration modes behind one runtime
 ## Verify before finishing a change
 `npm run check` passes. If you touched `worker.ts`, `runtime.ts`, `attach.ts` or the tools, also smoke-load in real pi (see docs/ARCHITECTURE.md "Smoke test") and say what you could not test.
 
+## tmux = real agents (v0.5.0)
+With `tmux.enabled`, `Runtime.run()` starts every worker through `src/core/tmux-worker.ts` (`TmuxWorker`): a REAL interactive pi (no `--mode`) in a tmux window opened by `TmuxManager.openAgent` (layouts `windows`|`tiled`). Control is a file channel (`src/core/tmux-control.ts`): worker→lead `events.jsonl`, lead→worker `commands.jsonl` (steer/abort/quit), heartbeat `alive`, exit code `exit`, secrets in `env.sh` (0600, deleted once the worker reports `ready`). The worker side is `src/core/tmux-child.ts` (`installTmuxChild`, loaded when `PI_SWARM_CTL_DIR` is set at depth>=1). `TmuxWorker` mirrors `RpcWorker`'s surface (`result`, `steer`, `abort`, `probe`) — keep them in sync. Fallback when tmux is off/unusable: `RpcWorker`/one-shot + the old log-follower viewer (`openWorker`). Tests: `test/tmux-real.test.ts` (real tmux + real pi + scripted OpenAI-compatible model; skipped without tmux).
+
+## Team communication (v0.5.0)
+`src/core/org.ts` (org chart, `validateOrg`, `resolveRecipient` for `@manager|@lead|@owner:<path>`, `TEAM_PROTOCOL`), `src/core/mailbox.ts` (atomic `drain(name, take?)`, kinds, `replyTo`, team chat record), `src/child-tools.ts` (`team_message`, `team_ask`, `team_inbox`, `team_directory`, `team_decide`, `team_decisions`, `team_tasks`, `team_task_request` + push watcher active only while the worker is busy). `CHILD_TOOL_NAMES` in `runtime.ts` must list every one of them (invariant 11). The lead is notified of unread mail by the team watcher via `Runtime.alert("message", …)`. `team_ask` consumes only its own answer (`replyTo`); the push watcher skips answers someone is waiting for.
+
 ## Monitoring / tmux (v0.4.0)
 `src/core/monitor.ts` (pure state machine + assess), `src/core/worklog.ts` (per-worker live log), `src/core/tmux.ts` (viewer windows). Wired in `Runtime.run()` via `WorkerOptions.onEvent/onStderr`; `RpcWorker.probe()` sends `get_state`. A watchdog kill is reported as `failed` (never `aborted`) so team retries work. Commands: `/swarm monitor|open|say|kill|tmux`. Tests: `test/monitor.test.ts` (fake pi has `CHATTER:<ms>` and answers `get_state`).
 

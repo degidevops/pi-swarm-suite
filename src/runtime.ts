@@ -2,6 +2,7 @@ import { type AgentDef, type SwarmConfig, type Tier, type Usage, type WorkerResu
 import { Ledger } from "./core/ledger.ts";
 import { runWorkerProcess } from "./core/worker.ts";
 import { RpcWorker } from "./core/rpc.ts";
+import { TmuxWorker } from "./core/tmux-worker.ts";
 import { MATE_ENV, TEAM_DIR_ENV } from "./core/child.ts";
 import {
   writeTeamRunning, removeTeamRunning,
@@ -17,12 +18,12 @@ import {
   ActivityTracker, DEFAULT_MONITOR, assess, describePhase, describeProbe, formatDuration,
   type Health, type MonitorConfig, type ProbeResult,
 } from "./core/monitor.ts";
-import { WorkLog, newRunId, pruneOldRuns, statusFile, tailLog, workersDir } from "./core/worklog.ts";
+import { WorkLog, newRunId, pruneOldRuns, safeFileName, statusFile, tailLog, workersDir } from "./core/worklog.ts";
 import { TmuxManager } from "./core/tmux.ts";
 import * as fs from "node:fs";
 
 /** Tools the messaging extension adds inside team children; they must survive a `--tools` allowlist. */
-export const CHILD_TOOL_NAMES = ["team_message", "team_inbox", "team_tasks", "team_task_request"];
+export const CHILD_TOOL_NAMES = ["team_message", "team_ask", "team_inbox", "team_tasks", "team_task_request", "team_directory", "team_decide", "team_decisions"];
 const READ_ONLY = new Set(["read", "grep", "find", "ls"]);
 
 /** Read-only agents are routed to the cheap model tier automatically. */
@@ -113,9 +114,9 @@ export class Runtime {
   onChange: () => void = () => undefined;
   onJobDone: (job: Job) => void = () => undefined;
   /** Fired when a worker goes quiet, is killed as stalled, or recovers. The extension forwards it to the user and the lead agent. */
-  onAlert: (a: { kind: "quiet" | "stalled" | "recovered"; label: string; text: string }) => void = () => undefined;
+  onAlert: (a: { kind: "quiet" | "stalled" | "recovered" | "message"; label: string; text: string; urgent?: boolean }) => void = () => undefined;
   private shutdown = new AbortController();
-  private live = new Map<string, RpcWorker>();
+  private live = new Map<string, { steer(text: string): boolean; probe(timeoutMs?: number): Promise<ProbeResult> }>();
   private nextId = 1;
   private nextJob = 1;
   private steerPollTimer: ReturnType<typeof setInterval> | undefined;
@@ -285,7 +286,6 @@ export class Runtime {
     }
     const log = new WorkLog(path.join(workersDir(this.cwd), this.runId), opts.label);
     info.logPath = log.path;
-    if (this.tmux.enabled) info.tmuxWindow = this.tmux.openWorker(opts.label, log.path, log.doneFile, cwd);
     this.persistWorker(info);
     this.emitChange();
 
@@ -309,7 +309,7 @@ export class Runtime {
       tools,
       signal,
       depth: this.depth,
-      extPath: opts.team ? this.extPath : undefined,
+      extPath: opts.team || this.tmux.enabled ? this.extPath : undefined,
       env: opts.team ? { [TEAM_DIR_ENV]: opts.team.dir, [MATE_ENV]: opts.team.mate } : undefined,
       onUsage: (d: Partial<Usage>) => {
         this.ledger.add(d);
@@ -341,7 +341,23 @@ export class Runtime {
 
     try {
       let res: WorkerResult;
-      if (opts.steerable) {
+      // With tmux on, EVERY worker (one-shot or team) is a real interactive pi in its own tmux window.
+      const ctlDir = path.join(workersDir(this.cwd), this.runId, `${safeFileName(opts.label)}.ctl`);
+      const tw = this.tmux.enabled ? await TmuxWorker.start(wopts, { tmux: this.tmux, ctlDir, approve: this.projectTrusted }) : undefined;
+      if (tw) {
+        info.tmuxWindow = tw.window;
+        info.steerable = true; // the window accepts steering whatever the caller asked for
+        this.live.set(opts.label, tw);
+        this.persistWorker(info);
+        this.emitChange();
+        try {
+          res = await tw.result;
+        } finally {
+          this.live.delete(opts.label);
+        }
+      } else if (opts.steerable) {
+        // tmux off or unusable: fall back to a headless worker; keep the log-follower window if tmux is on.
+        if (this.tmux.enabled) info.tmuxWindow = this.tmux.openWorker(opts.label, log.path, log.doneFile, cwd);
         const w = await RpcWorker.start(wopts);
         this.live.set(opts.label, w);
         try {
@@ -350,6 +366,7 @@ export class Runtime {
           this.live.delete(opts.label);
         }
       } else {
+        if (this.tmux.enabled) info.tmuxWindow = this.tmux.openWorker(opts.label, log.path, log.doneFile, cwd);
         res = await runWorkerProcess(wopts);
       }
       // A worker we killed (stall watchdog or /swarm kill) is a FAILURE, not an abort: team mode retries
@@ -371,9 +388,9 @@ export class Runtime {
     }
   }
 
-  private alert(kind: "quiet" | "stalled" | "recovered", label: string, text: string): void {
+  alert(kind: "quiet" | "stalled" | "recovered" | "message", label: string, text: string, urgent = false): void {
     try {
-      this.onAlert({ kind, label, text });
+      this.onAlert({ kind, label, text, urgent });
     } catch {
       /* alert delivery must never break a run */
     }

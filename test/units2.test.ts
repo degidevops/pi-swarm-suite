@@ -81,21 +81,21 @@ describe("child tools (teammate side)", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ct-"));
     fs.writeFileSync(path.join(dir, "team.json"), JSON.stringify({ teammates: [{ name: "alice" }, { name: "bob" }] }));
     const tools = new Map<string, { execute: (...a: unknown[]) => Promise<{ content: { text: string }[] }> }>();
-    registerChildTools({ registerTool: (t: { name: string }) => tools.set(t.name, t as never) } as never, dir, "alice");
-    expect([...tools.keys()].sort()).toEqual(["team_inbox", "team_message", "team_task_request", "team_tasks"]);
+    registerChildTools({ registerTool: (t: { name: string }) => tools.set(t.name, t as never), on: () => undefined } as never, dir, "alice");
+    expect([...tools.keys()].sort()).toEqual(["team_ask", "team_decide", "team_decisions", "team_directory", "team_inbox", "team_message", "team_task_request", "team_tasks"]);
     await tools.get("team_message")!.execute("i", { to: "bob", text: "api changed" });
     expect(new Mailbox(path.join(dir, "inbox")).drain("bob")[0]?.text).toBe("api changed");
     await expect(tools.get("team_message")!.execute("i", { to: "mallory", text: "x" })).rejects.toThrow(/unknown recipient/);
     await expect(tools.get("team_message")!.execute("i", { to: "alice", text: "x" })).rejects.toThrow(/unknown recipient/);
     new Mailbox(path.join(dir, "inbox")).send("lead", "alice", "hi");
-    expect((await tools.get("team_inbox")!.execute("i", {})).content[0]?.text).toContain("from lead: hi");
+    expect((await tools.get("team_inbox")!.execute("i", {})).content[0]?.text).toContain("from lead");
   });
 
   it("requests a new task (pending + needsPlan) and validates deps", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ctr-"));
     fs.writeFileSync(path.join(dir, "team.json"), JSON.stringify({ teammates: [{ name: "alice" }, { name: "bob" }] }));
     const tools = new Map<string, { execute: (...a: unknown[]) => Promise<{ content: { text: string }[] }> }>();
-    registerChildTools({ registerTool: (t: { name: string }) => tools.set(t.name, t as never) } as never, dir, "alice");
+    registerChildTools({ registerTool: (t: { name: string }) => tools.set(t.name, t as never), on: () => undefined } as never, dir, "alice");
     const store = new TaskStore(path.join(dir, "tasks"));
     store.create({ subject: "schema", description: "write schema" });
     const r = await tools.get("team_task_request")!.execute("i", { subject: "feed", description: "WRITE:b.txt=2", deps: ["1"], plan: true });

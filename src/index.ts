@@ -9,6 +9,8 @@ import { agentTool } from "./modes/agent.ts";
 import { DEPTH_ENV, MATE_ENV, TEAM_DIR_ENV } from "./core/child.ts";
 import { formatLog, readLog } from "./core/eventlog.ts";
 import { registerChildTools } from "./child-tools.ts";
+import { CTL_ENV } from "./core/tmux-control.ts";
+import { installTmuxChild } from "./core/tmux-child.ts";
 import { delegateTool } from "./modes/delegate.ts";
 import { listTeams, mergeTeam, teamLog, teamStatus, teamTool } from "./modes/team.ts";
 import { workflowTool } from "./modes/workflow.ts";
@@ -19,6 +21,7 @@ import { doctorReport } from "./core/doctor.ts";
 
 const WIDGET_KEY = "swarm-suite";
 const CHILD_FLAG = Symbol.for("pi-swarm-suite.child-tools");
+const CTL_FLAG = Symbol.for("pi-swarm-suite.tmux-child");
 const SECTION_KEY = "swarm_orchestration";
 
 const HELP = [
@@ -27,7 +30,7 @@ const HELP = [
   "/swarm open [label]         inspect one worker: state, what it is doing, log tail, how to follow it",
   "/swarm say <label> <text>   talk to a running worker (same as steer; RPC/team workers)",
   "/swarm kill <label>         stop one stuck worker (reported as failed, so team tasks retry)",
-  "/swarm tmux [on|off|kill]   one tmux window per worker + a monitor window (tmux attach -t swarm-<project>)",
+  "/swarm tmux [on|off|kill]   every agent runs as a REAL pi in its own tmux window (tmux attach -t swarm-<project>); layout \"tiled\" shows all in one window",
   "/swarm jobs                 background jobs (team/workflow runs)",
   "/swarm cost | reset-cost    token/cost totals | clear the ledger",
   "/swarm doctor               environment diagnosis (tools, agents, config, conflicts)",
@@ -83,6 +86,13 @@ export default function swarmSuite(pi: ExtensionAPI): void {
 
   // Inside a swarm child: no orchestration tools (no recursive swarms), only teammate messaging tools.
   if (depth >= 1) {
+    // Worker running as a real interactive pi inside a tmux window: forward events / obey the lead.
+    const ctlDir = process.env[CTL_ENV];
+    const gc = globalThis as Record<symbol, unknown>;
+    if (ctlDir && !gc[CTL_FLAG]) {
+      gc[CTL_FLAG] = true;
+      installTmuxChild(pi, ctlDir);
+    }
     const teamDirEnv = process.env[TEAM_DIR_ENV];
     const mate = process.env[MATE_ENV];
     const g = globalThis as Record<symbol, unknown>;
@@ -129,11 +139,20 @@ export default function swarmSuite(pi: ExtensionAPI): void {
    * Worker health alerts. The user always sees them; the lead agent is also told when a worker was stopped
    * as stalled (so it can re-plan or steer) — "quiet" is only a warning and stays out of the model's context.
    */
-  const notifyAlert = (a: { kind: "quiet" | "stalled" | "recovered"; label: string; text: string }) => {
+  const notifyAlert = (a: { kind: "quiet" | "stalled" | "recovered" | "message"; label: string; text: string; urgent?: boolean }) => {
     try {
-      uiCtx?.ui.notify(`swarm: ${a.text}`, a.kind === "recovered" ? "info" : "warning");
+      uiCtx?.ui.notify(`swarm: ${a.text}`, a.kind === "recovered" || a.kind === "message" ? "info" : "warning");
     } catch {
       /* ui may be gone */
+    }
+    if (a.kind === "message") {
+      // Teammates talking to the lead: a blocker/question wakes the lead up, FYIs just queue.
+      try {
+        pi.sendMessage({ customType: "swarm-message", content: `[swarm team] ${a.text}`, display: true, details: { label: a.label } }, { triggerTurn: a.urgent === true, deliverAs: "followUp" });
+      } catch {
+        /* best-effort */
+      }
+      return;
     }
     if (a.kind !== "stalled") return;
     try {

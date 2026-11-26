@@ -61,6 +61,17 @@ You do NOT have to uninstall billion-context to use pi-swarm-suite: its compress
 2. **pi-headless** — installs real pi, loads the extension (`-e` AND via `pi install ./`), and asserts what the model would see: tools listed, snippets are examples, `<swarm_orchestration>` injected, and coexistence with billion-context detected. Uses `scripts/diagnose-prompt.mjs` — no API token required.
 3. **pi-realtest** — the actual tool-choice battle with a real model (billion-context installed alongside). Needs repo secrets `PI_TEST_API_KEY` + vars `PI_TEST_PROVIDER`, `PI_TEST_MODEL`; skips gracefully when absent. Run it locally too: `PI_TEST_PROVIDER=openrouter PI_TEST_MODEL=openrouter/auto PI_TEST_API_KEY=... node scripts/realtest-toolchoice.mjs`.
 
+## Team communication (v0.5)
+
+Teams behave like an organisation, not N isolated task runners:
+
+- **Org chart.** `swarm_team create` teammates take `title`, `role` (responsibility), `reportsTo` (another teammate or `lead`) and `owns` (file globs). Every teammate's prompt contains the chart *with live activity* ("ana — Backend lead — working on #3 routes") and short working agreements (ask the owner before touching their files, escalate blockers to your manager, hand off what others build on, record decisions).
+- **Ask and wait.** `team_ask to=@owner:api/x.ts question=…` blocks until the owner answers (answer = `team_message kind=answer replyTo=<id>`); aliases `@manager`, `@lead`, `@owner:<path>`. If the person is not working at that moment it returns at once so nobody deadlocks.
+- **Pushed, not polled.** While a teammate works, its own process drains its inbox and steers itself, so peers reach each other directly; the lead is told about new mail (blockers/questions wake the lead).
+- **Typed messages.** `kind`: info, question, answer, blocker, handoff, review_request, decision. Every message is kept in `.pi/swarm/teams/<team>/messages.jsonl`.
+- **Shared decisions.** `team_decide` appends to `decisions.md` (and notifies who it affects); `team_decisions` reads it; `team_directory` shows the org chart and who is doing what.
+- Mailbox reads are atomic (rename-then-read): no message is lost when one arrives while another is read.
+
 ## Monitoring, stuck workers and tmux
 
 A worker that is silent for a while is ambiguous: waiting on a slow model, running a long tool, or hung. Every worker is now watched from its event stream:
@@ -75,7 +86,9 @@ For RPC (team) workers a quiet worker is also asked `get_state`: the log then sa
 
 Commands: `/swarm monitor` (health table), `/swarm open [label]` (state, what it is doing, log tail, how to follow it), `/swarm say <label> <text>` (talk to a running RPC worker; one-shot workers cannot be steered), `/swarm kill <label>`, `/swarm tmux [on|off|kill]`. When a worker is stopped as stalled the **lead agent is told** (a `swarm-alert` message) so it can re-plan; "quiet" only warns you.
 
-Every worker writes a live log to `.pi/swarm/workers/<run>/<label>.log` (newest 20 runs kept): `tail -F` it from any terminal. With tmux on, each worker also gets its own window in a detached session — `tmux attach -t swarm-<project>`: a `monitor` window with the status table, plus one window per worker following its log; when the worker ends the window drops into a shell in the worker's working directory (its worktree for team tasks). Windows are viewers only: closing them never kills a worker.
+Every worker writes a live log to `.pi/swarm/workers/<run>/<label>.log` (newest 20 runs kept): `tail -F` it from any terminal.
+
+**tmux = one real pi per agent (v0.5).** With tmux on, every worker (delegate, team, workflow) runs as a *real interactive pi* in its own tmux window of a detached session — `tmux attach -t swarm-<project>`. You see exactly what that agent is doing (reasoning, tool calls, diffs) and can type to it; the lead still gets its result, cost, steering and watchdog over a small file channel (`<run>/<label>.ctl/`). A `monitor` window shows the status table. When an agent finishes, its window drops into a shell in its working directory (its worktree for team tasks). `"tmux": {"enabled": true, "layout": "tiled"}` puts all agents as titled panes in ONE window so you can watch the whole team at once (best up to ~6 agents). If tmux is missing or a window cannot be opened, workers silently fall back to headless mode (log-follower window).
 
 ```json
 {
@@ -125,7 +138,7 @@ mkdir -p .pi/agents && cp examples/agents/*.md .pi/agents/   # example roles as 
 cp examples/swarm.json ~/.pi/agent/swarm.json     # global config; or <repo>/.pi/swarm.json (trusted projects only)
 ```
 Diagnose your environment any time with `/swarm doctor` (inside pi) or `node scripts/diagnose-prompt.mjs` (headless, no token).
-`swarm.json` (all keys optional): `maxConcurrency` (cap 16), `budgetUsd`, `worktrees`, `gates` (shell commands that must pass), `maxAttempts`, `reviewer` (project role that reviews each task's diff), `customRolesOnly` (default true), `models.{lead,worker,cheap}`, `workerTools`, `preHooks`, `postHooks`, `monitor.{idleWarnSec,idleKillSec,slowPhaseFactor,maxWorkerSec,probe,nudge,tickMs}`, `tmux` (`true` or `{enabled, session}`). Agent files take `name`, `description` (both required), `tools`, `model`, `tier: lead|worker|cheap` — see [docs/CUSTOM-AGENTS.md](docs/CUSTOM-AGENTS.md).
+`swarm.json` (all keys optional): `maxConcurrency` (cap 16), `budgetUsd`, `worktrees`, `gates` (shell commands that must pass), `maxAttempts`, `reviewer` (project role that reviews each task's diff), `customRolesOnly` (default true), `models.{lead,worker,cheap}`, `workerTools`, `preHooks`, `postHooks`, `monitor.{idleWarnSec,idleKillSec,slowPhaseFactor,maxWorkerSec,probe,nudge,tickMs}`, `tmux` (`true` or `{enabled, session, layout: "windows"|"tiled"}`). Agent files take `name`, `description` (both required), `tools`, `model`, `tier: lead|worker|cheap` — see [docs/CUSTOM-AGENTS.md](docs/CUSTOM-AGENTS.md).
 
 ## Typical session
 ```

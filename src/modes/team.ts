@@ -4,7 +4,8 @@ import { Type, type Static } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { Runtime } from "../runtime.ts";
 import { TaskStore, type TaskRecord } from "../core/tasks.ts";
-import { Mailbox, type MailMessage } from "../core/mailbox.ts";
+import { Mailbox, type MailMessage, MESSAGE_KINDS, formatMessages, isMessageKind } from "../core/mailbox.ts";
+import { type Teammate, TEAM_PROTOCOL, renderOrgChart, resolveRecipient, validateOrg } from "../core/org.ts";
 import { formatGateFailure, runGates } from "../core/gates.ts";
 import { appendLog } from "../core/eventlog.ts";
 import { buildReviewPrompt, parseVerdict } from "../core/review.ts";
@@ -59,6 +60,10 @@ export const TeamParams = Type.Object({
         name: Type.String(),
         agent: Type.Optional(Type.String({ description: "Agent definition for this teammate" })),
         model: Type.Optional(Type.String()),
+        title: Type.Optional(Type.String({ description: 'Job title, e.g. "Backend lead"' })),
+        role: Type.Optional(Type.String({ description: "What they are responsible for (1-2 sentences). Everyone sees it in the org chart." })),
+        reportsTo: Type.Optional(Type.String({ description: 'Escalation path: another teammate name, or "lead" (default)' })),
+        owns: Type.Optional(Type.Array(Type.String(), { description: 'File globs they own, e.g. "crates/feed/**"; others ask them before touching it' })),
       }),
       { minItems: 1, maxItems: 16 },
     ),
@@ -77,6 +82,7 @@ export const TeamParams = Type.Object({
   ),
   to: Type.Optional(Type.String({ description: "message: teammate name or 'all'" })),
   text: Type.Optional(Type.String({ description: "message / approve / revise text" })),
+  kind: Type.Optional(Type.String({ description: `message: ${MESSAGE_KINDS.join(" | ")} (default info). Use question when you need an answer, decision for rulings.` })),
   taskId: Type.Optional(Type.String({ description: "approve/revise: task id" })),
   background: Type.Optional(Type.Boolean({ description: "run: do not block; you are notified when the run settles" })),
   subject: Type.Optional(Type.String({ description: "team_task_add: short task title" })),
@@ -90,7 +96,7 @@ type Params = Static<typeof TeamParams>;
 interface TeamFile {
   name: string;
   createdAt: string;
-  teammates: { name: string; agent?: string; model?: string }[];
+  teammates: Teammate[];
 }
 
 export const teamDir = (cwd: string, name: string): string => path.join(cwd, ".pi", "swarm", "teams", assertSafeName(name, "team name"));
@@ -109,6 +115,8 @@ export function buildTaskPrompt(i: {
   deps: TaskRecord[];
   messages: MailMessage[];
   feedback?: string;
+  /** Org chart with live activity (renderOrgChart). */
+  org?: string;
 }): string {
   const parts: string[] = [
     `You are "${i.mate}" on team "${i.team}". Complete ONLY the task below; other teammates handle other tasks in their own worktrees. You can use team_message / team_inbox / team_tasks to coordinate.`,
@@ -125,7 +133,7 @@ export function buildTaskPrompt(i: {
         done.map((d) => `### Task ${d.id}: ${d.subject}\n${truncate(d.result ?? "", 3000)}`).join("\n\n"),
     );
   }
-  if (i.messages.length) parts.push(`## Messages for you\n${i.messages.map((m) => `- from ${m.from}: ${m.text}`).join("\n")}`);
+  if (i.messages.length) parts.push(`## Messages for you\n${formatMessages(i.messages)}`);
   if (i.feedback) parts.push(`## Your previous attempt did not pass — fix this first\n${truncate(i.feedback, 4000)}`);
   parts.push(`## When finished\nReply with a concise summary: what changed, files touched, and anything the lead must know. Do not merge branches or modify other worktrees.`);
   return parts.join("\n\n");
@@ -206,11 +214,21 @@ async function runTeam(rt: Runtime, team: TeamFile, signal: AbortSignal | undefi
   const active = new Map<string, string>(); // mate -> live worker label (steerable)
 
   // Deliver DMs to teammates that are mid-task by steering their running worker.
+  let leadSeen = 0;
   const watcher = setInterval(() => {
+    // Teammates → lead: surface unread mail to the lead's session (it is not pushed any other way).
+    const unreadForLead = mailbox.peek("lead");
+    if (unreadForLead.length === 0) leadSeen = 0;
+    else if (unreadForLead.length > leadSeen) {
+      const fresh = unreadForLead.slice(leadSeen);
+      leadSeen = unreadForLead.length;
+      const urgent = fresh.some((m) => m.kind === "blocker" || m.kind === "question" || m.kind === "review_request");
+      rt.alert("message", team.name, `${fresh.length} new message(s) for you in team ${team.name} (read with swarm_team action=inbox):\n${formatMessages(fresh).slice(0, 1200)}`, urgent);
+    }
     for (const [mate, label] of active) {
       const msgs = mailbox.drain(mate);
       if (!msgs.length) continue;
-      const body = `New message(s) from your team:\n${msgs.map((m) => `- from ${m.from}: ${m.text}`).join("\n")}`;
+      const body = `New message(s) from your team:\n${formatMessages(msgs)}`;
       if (rt.steer(label, body)) appendLog(log, "steered", { mate, count: msgs.length });
       else for (const m of msgs) mailbox.send(m.from, mate, m.text); // worker just finished: redeliver with next task
     }
@@ -285,6 +303,7 @@ async function runTeam(rt: Runtime, team: TeamFile, signal: AbortSignal | undefi
           deps: task.deps.map((d) => store.get(d)).filter((d): d is TaskRecord => !!d),
           messages: mailbox.drain(mate.name),
           feedback,
+          org: renderOrgChart(team.teammates, store.list(), mate.name),
         });
         active.set(mate.name, label);
         let res;
@@ -524,6 +543,8 @@ export function teamTool(getRt: (cwd: string) => Runtime): ToolDefinition<typeof
             seen.add(m.name);
             rt.resolveAgent(m.agent);
           }
+          const orgProblems = validateOrg(mates);
+          if (orgProblems.length) throw new Error(`invalid team structure: ${orgProblems.join("; ")}`);
           fs.mkdirSync(dir, { recursive: true });
           const team: TeamFile = { name: p.name, createdAt: new Date().toISOString(), teammates: mates };
           fs.writeFileSync(path.join(dir, "team.json"), JSON.stringify(team, null, 2));
@@ -551,16 +572,19 @@ export function teamTool(getRt: (cwd: string) => Runtime): ToolDefinition<typeof
           const team = loadTeam(rt.cwd, p.name);
           if (!p.to || !p.text) throw new Error("message requires to and text.");
           const box = new Mailbox(path.join(dir, "inbox"));
-          if (p.to === "all") return text(`Queued for ${box.broadcast("lead", team.teammates.map((m) => m.name), p.text)} teammate(s).`);
-          if (!team.teammates.some((m) => m.name === p.to)) throw new Error(`unknown teammate "${p.to}"`);
-          box.send("lead", p.to, p.text);
-          appendLog(teamLog(rt.cwd, p.name), "message", { to: p.to });
+          if (p.kind !== undefined && !isMessageKind(p.kind)) throw new Error(`unknown kind "${p.kind}". Use: ${MESSAGE_KINDS.join(", ")}`);
+          const kind = p.kind as (typeof MESSAGE_KINDS)[number] | undefined;
+          if (p.to === "all") return text(`Queued for ${box.broadcast("lead", team.teammates.map((m) => m.name), p.text, { kind })} teammate(s).`);
+          const to = p.to.startsWith("@") ? resolveRecipient(p.to, team.teammates, "lead") : p.to;
+          if (!to || !team.teammates.some((m) => m.name === to)) throw new Error(`unknown teammate "${p.to}"`);
+          box.send("lead", to, p.text, { kind });
+          appendLog(teamLog(rt.cwd, p.name), "message", { to, kind });
           return text(`Queued for ${p.to}; delivered live if they are working, otherwise with their next task.`);
         }
         case "inbox": {
           loadTeam(rt.cwd, p.name);
           const msgs = new Mailbox(path.join(dir, "inbox")).drain("lead");
-          return text(msgs.length ? msgs.map((m) => `from ${m.from}: ${m.text}`).join("\n") : "(no messages)");
+          return text(msgs.length ? formatMessages(msgs) : "(no messages)");
         }
         case "approve":
         case "revise": {

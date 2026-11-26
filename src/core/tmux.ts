@@ -35,6 +35,11 @@ export interface TmuxConfig {
   enabled: boolean;
   /** Session name override. Default: swarm-<project dir name>. */
   session?: string;
+  /**
+   * windows (default): one tmux window per agent. tiled: every agent is a pane in ONE window ("agents"),
+   * tiled so you can watch the whole team at a glance (best for up to ~6 agents).
+   */
+  layout?: "windows" | "tiled";
 }
 
 export function tmuxAvailable(exec: TmuxExec = defaultExec): boolean {
@@ -59,6 +64,31 @@ export const VIEWER_SCRIPT = [
   'exec "${SHELL:-sh}"',
 ].join("\n");
 
+/**
+ * Script run inside an agent's window. It sources the agent's environment (then deletes the file, it can hold
+ * API keys), runs the agent's argv exactly as given, records the exit code for the lead, and finally leaves a
+ * shell open in the agent's directory so the finished agent can be inspected.
+ */
+export const AGENT_SCRIPT = [
+  'ENVF="$1"; EXITF="$2"; shift 2',
+  '[ -r "$ENVF" ] && . "$ENVF"',
+  'rm -f "$ENVF"',
+  '"$@"',
+  "code=$?",
+  'printf "%s" "$code" > "$EXITF"',
+  'printf "\\n── agent exited (code %s) — this shell is in its working dir; Ctrl-b d to detach ──\\n" "$code"',
+  'exec "${SHELL:-sh}"',
+].join("\n");
+
+export interface OpenAgentSpec {
+  label: string;
+  cwd: string;
+  envFile: string;
+  exitFile: string;
+  command: string;
+  args: string[];
+}
+
 /** Script run in the monitor window: redraw the swarm status snapshot every 2 s. */
 export const MONITOR_SCRIPT = [
   'F="$1"',
@@ -73,6 +103,8 @@ export class TmuxManager {
   enabled: boolean;
   readonly session: string;
   private readonly windows = new Map<string, string>(); // label -> window name
+  private readonly targets = new Map<string, string>(); // window name -> tmux target (window name or pane id)
+  layout: "windows" | "tiled";
   private readonly usedNames = new Set<string>();
   private sessionReady = false;
 
@@ -82,6 +114,7 @@ export class TmuxManager {
     private readonly exec: TmuxExec = defaultExec,
   ) {
     this.enabled = cfg.enabled;
+    this.layout = cfg.layout === "tiled" ? "tiled" : "windows";
     this.session = sessionNameFor(cwd, cfg.session);
   }
 
@@ -147,6 +180,59 @@ export class TmuxManager {
     }
   }
 
+  /**
+   * Open a window (or pane) that RUNS the agent: a real interactive pi the user can watch and type into.
+   * Returns the name shown in tmux, or undefined when tmux is unavailable/disabled or the window failed.
+   */
+  openAgent(spec: OpenAgentSpec): string | undefined {
+    if (!this.enabled) return undefined;
+    try {
+      if (!this.sessionReady && !this.ensureSession()) return undefined;
+      const name = this.uniqueName(spec.label);
+      const inner = ["sh", "-c", AGENT_SCRIPT, "_", spec.envFile, spec.exitFile, spec.command, ...spec.args];
+      const target = this.layout === "tiled" ? this.openPane(name, spec.cwd, inner) : this.openWindow(name, spec.cwd, inner);
+      if (!target) return undefined;
+      this.windows.set(spec.label, name);
+      this.targets.set(name, target);
+      return name;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private openWindow(name: string, cwd: string, inner: string[]): string | undefined {
+    const args = ["new-window", "-d", "-P", "-F", "#{window_id}", "-t", `=${this.session}:`, "-n", name, "-c", cwd, ...inner];
+    let r = this.exec(args);
+    if (r.status !== 0) {
+      // The session may have been killed by the user in the meantime: retry once.
+      this.sessionReady = false;
+      if (!this.ensureSession()) return undefined;
+      r = this.exec(args);
+    }
+    return r.status === 0 ? r.stdout.trim() || name : undefined;
+  }
+
+  private openPane(name: string, cwd: string, inner: string[]): string | undefined {
+    const win = `=${this.session}:agents`;
+    const exists = this.exec(["list-panes", "-t", win, "-F", "#{pane_id}"]).status === 0;
+    const r = exists
+      ? this.exec(["split-window", "-d", "-P", "-F", "#{pane_id}", "-t", win, "-c", cwd, ...inner])
+      : this.exec(["new-window", "-d", "-P", "-F", "#{pane_id}", "-t", `=${this.session}:`, "-n", "agents", "-c", cwd, ...inner]);
+    if (r.status !== 0) return undefined;
+    const pane = r.stdout.trim();
+    this.exec(["select-pane", "-t", pane, "-T", name]);
+    this.exec(["set-option", "-w", "-t", win, "pane-border-status", "top"]);
+    this.exec(["set-option", "-w", "-t", win, "pane-border-format", " #{pane_title} "]);
+    this.exec(["select-layout", "-t", win, "tiled"]);
+    return pane;
+  }
+
+  /** Send Ctrl-C to an agent's window/pane (last resort when pi ignores the quit command). */
+  interrupt(name: string): void {
+    const target = this.targets.get(name);
+    if (target) this.exec(["send-keys", "-t", target, "C-c"]);
+  }
+
   /** Window names currently present in the session (empty if the session does not exist). */
   listWindows(): string[] {
     const r = this.exec(["list-windows", "-t", `=${this.session}`, "-F", "#{window_name}"]);
@@ -156,6 +242,7 @@ export class TmuxManager {
   killSession(): boolean {
     const ok = this.exec(["kill-session", "-t", `=${this.session}`]).status === 0;
     this.windows.clear();
+    this.targets.clear();
     this.usedNames.clear();
     this.sessionReady = false;
     return ok;
