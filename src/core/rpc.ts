@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { type WorkerResult, emptyUsage } from "../types.ts";
-import { type WorkerOptions, Collector, isObj } from "./worker.ts";
+import { type ResidentWorker, type TurnHooks, type WorkerOptions, Collector, isObj } from "./worker.ts";
 import { prepareChild } from "./child.ts";
 import { sleep, tail } from "./util.ts";
 import type { ProbeResult } from "./monitor.ts";
@@ -10,11 +10,14 @@ import type { ProbeResult } from "./monitor.ts";
  * steered while running (new instructions, teammate messages) and aborted cleanly.
  * Framing: strict JSONL split on LF only (per pi's RPC docs).
  */
-export class RpcWorker {
+export class RpcWorker implements ResidentWorker {
   readonly result: Promise<WorkerResult>;
   private resolveResult!: (r: WorkerResult) => void;
   private proc?: ChildProcess;
-  private readonly col: Collector;
+  private col: Collector;
+  private turnHooks?: TurnHooks;
+  private turnResolve?: (r: WorkerResult) => void;
+  private promptSeq = 1;
   private settled = false;
   private aborted = false;
   private stderr = "";
@@ -34,6 +37,19 @@ export class RpcWorker {
     const w = new RpcWorker(opts);
     await w.launch();
     return w;
+  }
+
+  /** Callbacks for the current turn (resident) or for the single run (one-shot). */
+  private get hk(): Pick<TurnHooks, "onEvent" | "onProgress" | "onStderr"> {
+    return this.turnHooks ?? this.opts;
+  }
+
+  get dead(): boolean {
+    return this.settled;
+  }
+
+  get window(): string | undefined {
+    return undefined;
   }
 
   private async launch(): Promise<void> {
@@ -59,13 +75,14 @@ export class RpcWorker {
     });
     proc.stderr?.on("data", (d) => {
       this.stderr += d.toString();
-      this.opts.onStderr?.(d.toString());
+      this.hk.onStderr?.(d.toString());
     });
     proc.stdin?.on("error", () => undefined); // EPIPE after the child exits is expected
     proc.on("error", (e) => void this.finish("failed", `spawn failed: ${e.message}`));
     proc.on("close", (code) => {
       if (!this.settled) void this.finish("failed", tail(this.stderr.trim(), 600) || `child exited early (code ${code})`);
     });
+    if (this.opts.persistent) return; // resident: tasks arrive through turn(), cancellation is per turn
     if (this.opts.signal) {
       if (this.opts.signal.aborted) this.abort();
       else this.opts.signal.addEventListener("abort", () => this.abort(), { once: true });
@@ -92,23 +109,23 @@ export class RpcWorker {
         return;
       }
       if (ev.command === "prompt") {
-        if (ev.success === false) void this.finish("failed", typeof ev.error === "string" ? ev.error : "prompt rejected");
-        else if (isObj(ev.data) && ev.data.disposition === "handled") void this.finish("failed", "prompt was handled by an extension; no agent run started");
+        const failure = ev.success === false ? (typeof ev.error === "string" ? ev.error : "prompt rejected") : isObj(ev.data) && ev.data.disposition === "handled" ? "prompt was handled by an extension; no agent run started" : undefined;
+        if (failure) void (this.opts.persistent ? this.endTurn("failed", failure) : this.finish("failed", failure));
       }
       return;
     }
-    this.opts.onEvent?.(ev); // everything except command responses counts as proof of life
+    this.hk.onEvent?.(ev); // everything except command responses counts as proof of life
     if (ev.type === "extension_ui_request") {
       // A headless worker has nobody to answer dialogs from other extensions: cancel instead of hanging forever.
       const method = ev.method;
       if (typeof ev.id === "string" && (method === "select" || method === "confirm" || method === "input" || method === "editor")) {
         this.send({ type: "extension_ui_response", id: ev.id, cancelled: true });
-        this.opts.onProgress?.(`(auto-cancelled a ${method} dialog from an extension)`);
+        this.hk.onProgress?.(`(auto-cancelled a ${method} dialog from an extension)`);
       }
       return;
     }
     if (ev.type === "agent_settled") {
-      void this.finish(ev.aborted === true ? "aborted" : "ok");
+      void (this.opts.persistent ? this.endTurn(ev.aborted === true ? "aborted" : "ok") : this.finish(ev.aborted === true ? "aborted" : "ok"));
       return;
     }
     this.col.feed(ev);
@@ -165,8 +182,63 @@ export class RpcWorker {
     this.aborted = true;
     this.send({ type: "abort" });
     setTimeout(() => {
-      if (!this.settled) void this.finish("aborted", "aborted");
+      if (!this.settled && (!this.opts.persistent || this.turnResolve)) void this.finish("aborted", "aborted");
     }, 2500).unref();
+  }
+
+  /**
+   * Resident mode: run one task in the live process. Resolves when the agent settles; the process stays up
+   * for the next task. Usage and output are per turn (a fresh collector).
+   */
+  turn(task: string, hooks: TurnHooks): Promise<WorkerResult> {
+    if (this.settled) return Promise.resolve(this.turnResult("failed", "resident worker has exited"));
+    this.turnHooks = hooks;
+    this.col = new Collector(hooks.onUsage, hooks.onProgress);
+    this.aborted = false;
+    const done = new Promise<WorkerResult>((resolve) => {
+      this.turnResolve = resolve;
+    });
+    if (hooks.signal?.aborted) this.abort();
+    else hooks.signal?.addEventListener("abort", () => this.abort(), { once: true });
+    if (!this.send({ id: `prompt-${++this.promptSeq}`, type: "prompt", message: task })) void this.endTurn("failed", "could not reach the worker process");
+    return done;
+  }
+
+  private turnResult(kind: "ok" | "failed" | "aborted", error?: string): WorkerResult {
+    const base: WorkerResult = {
+      label: this.turnHooks?.label ?? this.opts.label,
+      status: "failed",
+      output: this.col.lastText,
+      usage: this.col.usage ?? emptyUsage(),
+      model: this.opts.model,
+      exitCode: this.proc?.exitCode ?? null,
+      cwd: this.opts.cwd,
+    };
+    if (kind === "aborted" || this.aborted) return { ...base, status: "aborted", error: error ?? "aborted" };
+    if (kind === "failed") return { ...base, error };
+    if (this.col.lastError) return { ...base, error: this.col.lastError };
+    if (!this.col.lastText.trim()) return { ...base, error: "worker produced no output" };
+    return { ...base, status: "ok" };
+  }
+
+  private async endTurn(kind: "ok" | "failed" | "aborted", error?: string): Promise<void> {
+    const resolve = this.turnResolve;
+    if (!resolve) return;
+    this.turnResolve = undefined;
+    resolve(this.turnResult(kind, error));
+  }
+
+  /** End the process (orderly) and resolve any pending turn. */
+  close(): Promise<void> {
+    return this.finish("ok").then(() => undefined);
+  }
+
+  /** Resolve the one-shot result and any turn that is still waiting (resident process ended mid-turn). */
+  private deliver(r: WorkerResult): void {
+    this.resolveResult(r);
+    const pending = this.turnResolve;
+    this.turnResolve = undefined;
+    pending?.(r);
   }
 
   private async finish(kind: "ok" | "failed" | "aborted", error?: string): Promise<void> {
@@ -194,10 +266,10 @@ export class RpcWorker {
       exitCode: proc?.exitCode ?? null,
       cwd: this.opts.cwd,
     };
-    if (kind === "aborted" || this.aborted) return this.resolveResult({ ...base, status: "aborted", error: error ?? "aborted" });
-    if (kind === "failed") return this.resolveResult({ ...base, error });
-    if (this.col.lastError) return this.resolveResult({ ...base, error: this.col.lastError });
-    if (!this.col.lastText.trim()) return this.resolveResult({ ...base, error: "worker produced no output" });
-    this.resolveResult({ ...base, status: "ok" });
+    if (kind === "aborted" || this.aborted) return this.deliver({ ...base, status: "aborted", error: error ?? "aborted" });
+    if (kind === "failed") return this.deliver({ ...base, error });
+    if (this.col.lastError) return this.deliver({ ...base, error: this.col.lastError });
+    if (!this.col.lastText.trim()) return this.deliver({ ...base, error: "worker produced no output" });
+    this.deliver({ ...base, status: "ok" });
   }
 }

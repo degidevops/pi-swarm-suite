@@ -68,7 +68,7 @@ export async function prepareChild(mode: "json" | "rpc" | "tui", spec: ChildSpec
     await fs.promises.writeFile(file, spec.systemPrompt, { encoding: "utf-8", mode: 0o600 });
     args.push("--append-system-prompt", file);
   }
-  if (mode === "json" || mode === "tui") {
+  if (mode === "json" || (mode === "tui" && task !== undefined)) {
     const t = task ?? "";
     args.push(`Task: ${t.length > 60_000 ? `${t.slice(0, 60_000)}\n…[task truncated]` : t}`);
   }

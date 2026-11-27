@@ -29,6 +29,7 @@ const assistant = (text, cost, error) => ({
   type: "message_end",
   message: { role: "assistant", content: [{ type: "text", text }], usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: { total: cost } }, stopReason: error ? "error" : "stop", errorMessage: error },
 });
+let turnsServed = 0;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 let uiWaiter = null;
@@ -69,6 +70,8 @@ async function act(task, steers, isAborted) {
     if (task.includes("Approved plan (follow it)")) text += " APPROVED_PLAN";
     if (task.includes("Messages for you")) text += " HAD_INBOX";
   }
+  if (task.includes("SAME teammate continuing")) text += " CONTINUING";
+  if (task.includes("WHOAMI")) text += ` WHOAMI pid=${process.pid} turn=${++turnsServed} cwd=${process.cwd()}`;
   for (const s of steers) text += ` STEERED:${s}`;
   return { text: text + dialog, cost };
 }
@@ -82,6 +85,7 @@ if (mode === "rpc") {
     if (cmd.type === "prompt") {
       out({ id: cmd.id, type: "response", command: "prompt", success: true, data: { disposition: "started" } });
       running = true;
+      aborted = false; steers.length = 0;
       const r = await act(cmd.message, steers, () => aborted);
       running = false;
       if (!aborted) { out(assistant(r.text, r.cost, r.error)); out({ type: "agent_end", messages: [], willRetry: false }); }

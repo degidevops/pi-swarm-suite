@@ -72,6 +72,15 @@ Teams behave like an organisation, not N isolated task runners:
 - **Shared decisions.** `team_decide` appends to `decisions.md` (and notifies who it affects); `team_decisions` reads it; `team_directory` shows the org chart and who is doing what.
 - Mailbox reads are atomic (rename-then-read): no message is lost when one arrives while another is read.
 
+## Resident teammates (v0.6)
+
+A teammate is now a **person, not a one-off job**: `swarm_team run` starts one long-lived pi per teammate (its own tmux window when tmux is on) and hands it tasks one after another in that same process. It remembers earlier tasks and decisions, keeps one working directory, and its window stays the same for the whole run.
+
+- **Per-task branches are unchanged.** Each teammate has a stable "home" worktree; every task is checked out there on its own branch (`swarm/<team>/<id>`, dependency branches merged in), so diffs, scope checks, gates, review and `/swarm merge` behave exactly as before. Home worktrees are removed when the run ends; task branches stay.
+- **Always reachable.** While the run is going, an idle teammate that receives a `question`, `blocker` or `review_request` is woken for one short turn to answer it, so `team_ask` works even between tasks. Other mail waits for the next task.
+- **Recovery.** If a resident dies, is stalled-killed or is aborted, the next task starts a fresh process automatically. Planning passes and independent reviews still run as separate one-shot workers (read-only tools / fresh eyes).
+- **Scope.** Residency lasts for one `run`; when the run ends the processes exit (windows stay open on a shell). A later `run` starts fresh processes (no cross-run memory yet).
+
 ## Monitoring, stuck workers and tmux
 
 A worker that is silent for a while is ambiguous: waiting on a slow model, running a long tool, or hung. Every worker is now watched from its event stream:

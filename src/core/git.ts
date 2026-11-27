@@ -59,6 +59,46 @@ export async function createWorktree(root: string, name: string, branch: string,
   return { path: wtPath, branch };
 }
 
+/** Current commit of `cwd` (full sha), or undefined. */
+export async function headSha(cwd: string): Promise<string | undefined> {
+  const r = await git(cwd, ["rev-parse", "HEAD"]);
+  return r.code === 0 ? r.stdout.trim() : undefined;
+}
+
+/**
+ * A long-lived worktree for one resident teammate (detached HEAD). Tasks are switched onto per-task branches
+ * with `startTaskBranch`, so the teammate's process keeps one stable working directory across tasks.
+ */
+export async function createHomeWorktree(root: string, name: string): Promise<Worktree> {
+  await ensureExcluded(root);
+  const wtPath = path.join(root, ".pi", "swarm", "worktrees", name);
+  fs.mkdirSync(path.dirname(wtPath), { recursive: true });
+  await git(root, ["worktree", "remove", "--force", wtPath]); // leftover from a crashed run
+  await git(root, ["worktree", "prune"]);
+  const r = await git(root, ["worktree", "add", "--detach", wtPath, "HEAD"]);
+  if (r.code !== 0) throw new Error(`git worktree add failed: ${r.stderr.trim()}`);
+  return { path: wtPath, branch: "" };
+}
+
+/** Discard everything uncommitted in a worktree (tracked and untracked). */
+export async function resetClean(wtPath: string): Promise<void> {
+  await git(wtPath, ["reset", "--hard", "-q"]);
+  await git(wtPath, ["clean", "-fdq"]);
+}
+
+/** Put a home worktree on a fresh branch `branch` starting at `base`. Any previous leftovers are discarded. */
+export async function startTaskBranch(wtPath: string, branch: string, base: string): Promise<void> {
+  await resetClean(wtPath);
+  const r = await git(wtPath, ["checkout", "-q", "-f", "-B", branch, base]);
+  if (r.code !== 0) throw new Error(`git checkout -B ${branch} failed: ${r.stderr.trim()}`);
+}
+
+/** Detach a home worktree from its task branch (so the branch can be kept or deleted) and clean it. */
+export async function releaseTaskBranch(wtPath: string): Promise<void> {
+  await resetClean(wtPath);
+  await git(wtPath, ["checkout", "-q", "--detach"]);
+}
+
 /** Create a scratch worktree for resolving merge conflicts: branch `swarm/resolve/<name>`. */
 export async function createScratchWorktree(root: string, name: string, base = "HEAD"): Promise<Worktree> {
   return createWorktree(root, name, `swarm/resolve/${name}`, base);

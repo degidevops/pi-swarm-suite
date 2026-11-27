@@ -1,8 +1,10 @@
 import { type AgentDef, type SwarmConfig, type Tier, type Usage, type WorkerResult } from "./types.ts";
 import { Ledger } from "./core/ledger.ts";
-import { runWorkerProcess } from "./core/worker.ts";
+import { runWorkerProcess, type WorkerOptions } from "./core/worker.ts";
 import { RpcWorker } from "./core/rpc.ts";
 import { TmuxWorker } from "./core/tmux-worker.ts";
+import { setPresence } from "./core/presence.ts";
+import type { ResidentWorker } from "./core/worker.ts";
 import { MATE_ENV, TEAM_DIR_ENV } from "./core/child.ts";
 import {
   writeTeamRunning, removeTeamRunning,
@@ -79,6 +81,13 @@ export interface RunOptions {
   teamName?: string;
   /** When set, the worker pi persists its session under this directory (ROADMAP #3). */
   sessionDir?: string;
+  /**
+   * Resident worker key (e.g. "team/mate"). The first call starts a long-lived pi in `cwd`; later calls with the
+   * same key run their task in that SAME process (context, tmux window and working directory carry over).
+   * Turns of one resident run strictly one after another. `agent`, `tools`, `model` and `cwd` of the FIRST call
+   * define the process; later calls only provide `task`, `label`, `signal`.
+   */
+  resident?: string;
 }
 
 export interface Job {
@@ -167,6 +176,7 @@ export class Runtime {
   abortAll(_reason: string): void {
     this.shutdown.abort();
     this.shutdown = new AbortController();
+    void this.closeResidents();
     for (const j of this.jobs.values()) if (j.status === "running") j.controller.abort();
     this.onChange();
   }
@@ -251,7 +261,49 @@ export class Runtime {
     return [...this.live.keys()];
   }
 
-  async run(opts: RunOptions): Promise<WorkerResult> {
+  /** Live resident workers by key, and the per-key chain that serialises their turns. */
+  private residents = new Map<string, ResidentWorker>();
+  private residentChains = new Map<string, Promise<unknown>>();
+
+  /** Run a task. Residents run their turns strictly in order; everything else runs immediately. */
+  run(opts: RunOptions): Promise<WorkerResult> {
+    const key = opts.resident;
+    if (!key) return this.runOnce(opts);
+    const prev = this.residentChains.get(key) ?? Promise.resolve();
+    const next = prev.then(() => this.runOnce(opts));
+    this.residentChains.set(key, next.catch(() => undefined));
+    return next;
+  }
+
+  /** Is a live resident worker running under this key? */
+  hasResident(key: string): boolean {
+    const w = this.residents.get(key);
+    return !!w && !w.dead;
+  }
+
+  /** End resident workers (all, or those whose key starts with `prefix`). Their tmux windows stay open on a shell. */
+  async closeResidents(prefix = ""): Promise<void> {
+    const keys = [...this.residents.keys()].filter((k) => k.startsWith(prefix));
+    await Promise.all(
+      keys.map(async (k) => {
+        const w = this.residents.get(k);
+        this.residents.delete(k);
+        await w?.close().catch(() => undefined);
+      }),
+    );
+  }
+
+  private async obtainResident(key: string, wopts: WorkerOptions, ctlDir: string): Promise<ResidentWorker> {
+    const existing = this.residents.get(key);
+    if (existing && !existing.dead) return existing;
+    const ropts = { ...wopts, label: key, persistent: true, task: "", signal: undefined };
+    const tw = this.tmux.enabled ? await TmuxWorker.start(ropts, { tmux: this.tmux, ctlDir, approve: this.projectTrusted }) : undefined;
+    const w: ResidentWorker = tw ?? (await RpcWorker.start(ropts));
+    this.residents.set(key, w);
+    return w;
+  }
+
+  private async runOnce(opts: RunOptions): Promise<WorkerResult> {
     const cwd = opts.cwd ?? this.cwd;
     if (this.ledger.exceeded()) {
       return {
@@ -342,7 +394,30 @@ export class Runtime {
     try {
       let res: WorkerResult;
       // With tmux on, EVERY worker (one-shot or team) is a real interactive pi in its own tmux window.
-      const ctlDir = path.join(workersDir(this.cwd), this.runId, `${safeFileName(opts.label)}.ctl`);
+      const ctlDir = path.join(workersDir(this.cwd), this.runId, `${safeFileName(opts.resident ?? opts.label)}.ctl`);
+      if (opts.resident) {
+        // Resident teammate: one long-lived pi; this call is one more task for it.
+        const w = await this.obtainResident(opts.resident, wopts, ctlDir);
+        info.tmuxWindow = w.window || undefined;
+        info.steerable = true;
+        this.live.set(opts.label, w);
+        this.persistWorker(info);
+        this.emitChange();
+        if (opts.team) setPresence(opts.team.dir, opts.team.mate, "working");
+        try {
+          res = await w.turn(opts.task, {
+            label: opts.label,
+            signal,
+            onUsage: wopts.onUsage,
+            onProgress: wopts.onProgress,
+            onEvent: wopts.onEvent,
+            onStderr: wopts.onStderr,
+          });
+        } finally {
+          this.live.delete(opts.label);
+          if (opts.team) setPresence(opts.team.dir, opts.team.mate, w.dead ? null : "idle");
+        }
+      } else {
       const tw = this.tmux.enabled ? await TmuxWorker.start(wopts, { tmux: this.tmux, ctlDir, approve: this.projectTrusted }) : undefined;
       if (tw) {
         info.tmuxWindow = tw.window;
@@ -368,6 +443,7 @@ export class Runtime {
       } else {
         if (this.tmux.enabled) info.tmuxWindow = this.tmux.openWorker(opts.label, log.path, log.doneFile, cwd);
         res = await runWorkerProcess(wopts);
+      }
       }
       // A worker we killed (stall watchdog or /swarm kill) is a FAILURE, not an abort: team mode retries
       // failures with the reason injected, while an abort just parks the task as pending.

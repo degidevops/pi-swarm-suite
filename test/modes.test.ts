@@ -55,6 +55,25 @@ describe("buildTaskPrompt", () => {
     expect(p).toContain("Gate failed: cargo clippy");
     expect(p).toContain("Do not merge branches");
   });
+  it("shows the org chart, the working agreements and the continuing note", () => {
+    const p = buildTaskPrompt({
+      team: "t",
+      mate: "alice",
+      task: task({}),
+      deps: [],
+      messages: [],
+      org: "lead — coordinator\nalice (Backend lead) ← you — reports to lead",
+      continuing: true,
+    });
+    expect(p).toContain("## Your team");
+    expect(p).toContain("alice (Backend lead) ← you");
+    expect(p).toContain("How we work together");
+    expect(p).toContain("team_ask");
+    expect(p).toContain("SAME teammate continuing");
+    const plain = buildTaskPrompt({ team: "t", mate: "a", task: task({ deps: [] }), deps: [], messages: [] });
+    expect(plain).not.toContain("## Your team");
+    expect(plain).not.toContain("SAME teammate");
+  });
   it("omits optional sections when empty", () => {
     const p = buildTaskPrompt({ team: "t", mate: "a", task: task({ deps: [] }), deps: [], messages: [] });
     expect(p).not.toContain("Messages for you");

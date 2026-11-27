@@ -14,7 +14,7 @@ import { type WorkerResult, emptyUsage } from "../types.ts";
 import { prepareChild } from "./child.ts";
 import type { ProbeResult } from "./monitor.ts";
 import { type TmuxManager } from "./tmux.ts";
-import { type WorkerOptions, Collector, isObj } from "./worker.ts";
+import { type ResidentWorker, type TurnHooks, type WorkerOptions, Collector, isObj } from "./worker.ts";
 import { type CtlCommand, JsonlTail, appendJsonl, ctlPaths, CTL_ENV, renderEnvFile } from "./tmux-control.ts";
 import { sleep } from "./util.ts";
 
@@ -31,12 +31,14 @@ export interface TmuxWorkerOptions {
   approve: boolean;
 }
 
-export class TmuxWorker {
+export class TmuxWorker implements ResidentWorker {
   readonly result: Promise<WorkerResult>;
   /** tmux window (or pane) name the worker runs in. */
   window = "";
   private resolveResult!: (r: WorkerResult) => void;
-  private readonly col: Collector;
+  private col: Collector;
+  private turnHooks?: TurnHooks;
+  private turnResolve?: (r: WorkerResult) => void;
   private readonly events: JsonlTail;
   private readonly paths: ReturnType<typeof ctlPaths>;
   private settled = false;
@@ -59,6 +61,14 @@ export class TmuxWorker {
     });
   }
 
+  private get hk(): Pick<TurnHooks, "onEvent"> {
+    return this.turnHooks ?? this.opts;
+  }
+
+  get dead(): boolean {
+    return this.settled;
+  }
+
   /** Start the worker. Returns undefined when no tmux window could be opened (caller falls back to headless). */
   static async start(opts: WorkerOptions, t: TmuxWorkerOptions): Promise<TmuxWorker | undefined> {
     const w = new TmuxWorker(opts, t);
@@ -75,7 +85,7 @@ export class TmuxWorker {
     for (const f of [this.paths.events, this.paths.commands]) fs.writeFileSync(f, "");
     fs.rmSync(this.paths.exit, { force: true });
 
-    const prep = await prepareChild("tui", { ...opts, approve: t.approve }, opts.task);
+    const prep = await prepareChild("tui", { ...opts, approve: t.approve }, opts.persistent ? undefined : opts.task);
     this.cleanup = prep.cleanup;
     const env = { ...prep.env, [CTL_ENV]: t.ctlDir };
     fs.writeFileSync(this.paths.env, renderEnvFile(env), { mode: 0o600 });
@@ -96,7 +106,7 @@ export class TmuxWorker {
     this.window = name;
     this.timer = setInterval(() => this.tick(), POLL_MS);
     this.timer.unref?.();
-    if (opts.signal) opts.signal.addEventListener("abort", () => this.abort(), { once: true });
+    if (opts.signal && !opts.persistent) opts.signal.addEventListener("abort", () => this.abort(), { once: true });
     return true;
   }
 
@@ -122,13 +132,15 @@ export class TmuxWorker {
       fs.rmSync(this.paths.env, { force: true }); // secrets are no longer needed on disk
     }
     if (ev.type === "agent_start") this.streaming = true;
-    this.opts.onEvent?.(ev);
+    this.hk.onEvent?.(ev);
     if (ev.type === "agent_settled") {
       this.streaming = false;
-      void this.finish(ev.aborted === true ? "aborted" : "ok");
+      const kind = ev.aborted === true ? "aborted" : "ok";
+      if (this.opts.persistent) this.endTurn(kind);
+      else void this.finish(kind);
       return;
     }
-    this.col.feed(ev);
+    if (!this.opts.persistent || this.turnResolve) this.col.feed(ev); // resident: ignore turns the user types by hand
   }
 
   private command(cmd: CtlCommand): boolean {
@@ -146,8 +158,52 @@ export class TmuxWorker {
     this.aborted = true;
     this.command({ type: "abort" });
     setTimeout(() => {
-      if (!this.settled) void this.finish("aborted", "aborted");
+      if (!this.settled && (!this.opts.persistent || this.turnResolve)) void this.finish("aborted", "aborted");
     }, 2500).unref();
+  }
+
+  /** Resident mode: give the live pi one more task (typed into its window by the control channel). */
+  async turn(task: string, hooks: TurnHooks): Promise<WorkerResult> {
+    if (this.settled) return this.turnResult("failed", `resident worker has exited — see tmux window "${this.window}"`);
+    this.turnHooks = hooks;
+    this.col = new Collector(hooks.onUsage, hooks.onProgress);
+    this.aborted = false;
+    const done = new Promise<WorkerResult>((resolve) => {
+      this.turnResolve = resolve;
+    });
+    if (hooks.signal?.aborted) this.abort();
+    else hooks.signal?.addEventListener("abort", () => this.abort(), { once: true });
+    while (!this.ready && !this.settled) await sleep(100);
+    if (!this.settled) this.command({ type: "steer", text: task }); // idle pi starts a new turn for it
+    return done;
+  }
+
+  private turnResult(kind: "ok" | "failed" | "aborted", error?: string): WorkerResult {
+    const base: WorkerResult = {
+      label: this.turnHooks?.label ?? this.opts.label,
+      status: "failed",
+      output: this.col.lastText,
+      usage: this.col.usage ?? emptyUsage(),
+      model: this.opts.model,
+      exitCode: null,
+      cwd: this.opts.cwd,
+    };
+    if (kind === "aborted" || this.aborted) return { ...base, status: "aborted", error: error ?? "aborted" };
+    if (kind === "failed") return { ...base, error };
+    if (this.col.lastError) return { ...base, error: this.col.lastError };
+    if (!this.col.lastText.trim()) return { ...base, error: "worker produced no output" };
+    return { ...base, status: "ok" };
+  }
+
+  private endTurn(kind: "ok" | "failed" | "aborted", error?: string): void {
+    const resolve = this.turnResolve;
+    if (!resolve) return;
+    this.turnResolve = undefined;
+    resolve(this.turnResult(kind, error));
+  }
+
+  close(): Promise<void> {
+    return this.finish("ok");
   }
 
   /** The heartbeat file is touched every second by the worker's event loop; a stale one means it is hung. */
@@ -159,6 +215,13 @@ export class TmuxWorker {
       /* not started yet */
     }
     return Promise.resolve({ responsive, isStreaming: this.streaming, at: Date.now() });
+  }
+
+  private deliver(r: WorkerResult): void {
+    this.resolveResult(r);
+    const pending = this.turnResolve;
+    this.turnResolve = undefined;
+    pending?.(r);
   }
 
   private async finish(kind: "ok" | "failed" | "aborted", error?: string): Promise<void> {
@@ -182,10 +245,10 @@ export class TmuxWorker {
       exitCode: null,
       cwd: this.opts.cwd,
     };
-    if (kind === "aborted" || this.aborted) return this.resolveResult({ ...base, status: "aborted", error: error ?? "aborted" });
-    if (kind === "failed") return this.resolveResult({ ...base, error });
-    if (this.col.lastError) return this.resolveResult({ ...base, error: this.col.lastError });
-    if (!this.col.lastText.trim()) return this.resolveResult({ ...base, error: "worker produced no output" });
-    this.resolveResult({ ...base, status: "ok" });
+    if (kind === "aborted" || this.aborted) return this.deliver({ ...base, status: "aborted", error: error ?? "aborted" });
+    if (kind === "failed") return this.deliver({ ...base, error });
+    if (this.col.lastError) return this.deliver({ ...base, error: this.col.lastError });
+    if (!this.col.lastText.trim()) return this.deliver({ ...base, error: "worker produced no output" });
+    this.deliver({ ...base, status: "ok" });
   }
 }

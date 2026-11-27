@@ -4,6 +4,7 @@ import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { MESSAGE_KINDS, Mailbox, formatMessages, isMessageKind, type MessageKind } from "./core/mailbox.ts";
 import { type Teammate, managerOf, renderOrgChart, resolveRecipient } from "./core/org.ts";
+import { readPresence } from "./core/presence.ts";
 import { TaskStore } from "./core/tasks.ts";
 import { appendLog } from "./core/eventlog.ts";
 import { sleep } from "./core/util.ts";
@@ -47,8 +48,8 @@ export function registerChildTools(pi: ExtensionAPI, teamDir: string, me: string
     if (!isMessageKind(k)) throw new Error(`unknown kind "${k}". Use: ${MESSAGE_KINDS.join(", ")}`);
     return k;
   };
-  /** A teammate "is working" when it owns an in-progress task (its worker is alive and can answer). */
-  const isWorking = (name: string): boolean => name === "lead" || store().list().some((t) => t.owner === name && t.status === "in_progress");
+  /** Reachable = a live resident process (working or idle) or an in-progress task: it will see the question. */
+  const isWorking = (name: string): boolean => name === "lead" || readPresence(teamDir, name) !== undefined || store().list().some((t) => t.owner === name && t.status === "in_progress");
 
   // ── push delivery ────────────────────────────────────────────────────────────────────────────────
   // Only while busy: between runs the inbox is left alone so mail is delivered with the next task prompt.

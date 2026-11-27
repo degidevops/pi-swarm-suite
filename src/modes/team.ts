@@ -4,31 +4,14 @@ import { Type, type Static } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { Runtime } from "../runtime.ts";
 import { TaskStore, type TaskRecord } from "../core/tasks.ts";
+import { clearAllPresence } from "../core/presence.ts";
 import { Mailbox, type MailMessage, MESSAGE_KINDS, formatMessages, isMessageKind } from "../core/mailbox.ts";
 import { type Teammate, TEAM_PROTOCOL, renderOrgChart, resolveRecipient, validateOrg } from "../core/org.ts";
 import { formatGateFailure, runGates } from "../core/gates.ts";
 import { appendLog } from "../core/eventlog.ts";
 import { buildReviewPrompt, parseVerdict } from "../core/review.ts";
 import { outsideScope, scopesOverlap } from "../core/scope.ts";
-import {
-  branchExists,
-  changedPaths,
-  commitAll,
-  createScratchWorktree,
-  createWorktree,
-  deleteBranch,
-  commitResolution,
-  diffText,
-  git,
-  isClean,
-  listUnmerged,
-  mergeBranchesInto,
-  mergeIntoCurrent,
-  resolveWithTheirs,
-  removeWorktree,
-  repoRoot,
-  type MergeOutcome,
-} from "../core/git.ts";
+import { branchExists, changedPaths, commitAll, createScratchWorktree, createWorktree, deleteBranch, commitResolution, diffText, git, isClean, listUnmerged, mergeBranchesInto, mergeIntoCurrent, resolveWithTheirs, removeWorktree, repoRoot, type MergeOutcome, createHomeWorktree, startTaskBranch, releaseTaskBranch, headSha } from "../core/git.ts";
 import { appendTranscript, readTranscript, transcriptDir } from "../core/transcript.ts";
 import { assertSafeName, formatTokens, formatUsd, sleep, truncate } from "../core/util.ts";
 import { writeTeamRunning, removeTeamRunning } from "../core/attach.ts";
@@ -117,9 +100,15 @@ export function buildTaskPrompt(i: {
   feedback?: string;
   /** Org chart with live activity (renderOrgChart). */
   org?: string;
+  /** This teammate is a resident process that already worked on earlier tasks in this run. */
+  continuing?: boolean;
 }): string {
   const parts: string[] = [
-    `You are "${i.mate}" on team "${i.team}". Complete ONLY the task below; other teammates handle other tasks in their own worktrees. You can use team_message / team_inbox / team_tasks to coordinate.`,
+    `You are "${i.mate}" on team "${i.team}". Complete ONLY the task below; other teammates handle other tasks in their own worktrees. Coordinate with team_ask / team_message / team_directory / team_decide.`,
+    ...(i.continuing
+      ? ["You are the SAME teammate continuing in this session: you remember your earlier tasks and decisions. Your workspace was switched to a fresh branch for this task, so files may differ from what you remember — re-read before editing."]
+      : []),
+    ...(i.org ? [`## Your team\n${i.org}\n\n${TEAM_PROTOCOL}`] : []),
     `## Task ${i.task.id}: ${i.task.subject}\n${i.task.description}`,
   ];
   if (i.task.scope?.length) parts.push(`## File ownership\nYou may only modify files matching: ${i.task.scope.join(", ")}. Changes elsewhere will be rejected.`);
@@ -212,6 +201,45 @@ async function runTeam(rt: Runtime, team: TeamFile, signal: AbortSignal | undefi
 
   const stopped = () => signal?.aborted || rt.ledger.exceeded();
   const active = new Map<string, string>(); // mate -> live worker label (steerable)
+  const residentKey = (mate: string) => `${team.name}/${mate}`;
+  const homes = new Map<string, string>(); // mate -> stable working directory of their resident process
+  const homeFor = async (mate: string): Promise<string> => {
+    if (!root) return rt.cwd;
+    let h = homes.get(mate);
+    if (!h) {
+      h = (await createHomeWorktree(root, `${team.name}-${mate}-home`)).path;
+      homes.set(mate, h);
+    }
+    return h;
+  };
+  const waking = new Set<string>(); // mates currently answering mail in an idle turn
+  const WAKE_KINDS = new Set(["question", "blocker", "review_request"]);
+  // An idle resident teammate that receives a question/blocker is woken for ONE short turn to answer it.
+  const wake = (mate: TeamFile["teammates"][number]): void => {
+    const key = residentKey(mate.name);
+    if (waking.has(mate.name) || active.has(mate.name) || !rt.hasResident(key)) return;
+    if (!mailbox.peek(mate.name).some((m) => WAKE_KINDS.has(m.kind ?? "info"))) return;
+    const msgs = mailbox.drain(mate.name);
+    waking.add(mate.name);
+    void (async () => {
+      try {
+        const cwd = await homeFor(mate.name);
+        await rt.run({
+          label: `${team.name}/${mate.name}#mail`,
+          resident: key,
+          cwd,
+          signal,
+          agent: rt.resolveAgent(mate.agent),
+          team: { dir, mate: mate.name },
+          teamName: team.name,
+          task: `You have new message(s) while between tasks:\n${formatMessages(msgs)}\n\nAnswer questions with team_message kind=answer replyTo=<id>; handle blockers if you can, otherwise escalate to your manager. Do NOT start new work and do not edit files. Keep it short, then stop.`,
+        });
+        appendLog(log, "woke", { mate: mate.name, count: msgs.length });
+      } finally {
+        waking.delete(mate.name);
+      }
+    })();
+  };
 
   // Deliver DMs to teammates that are mid-task by steering their running worker.
   let leadSeen = 0;
@@ -230,8 +258,9 @@ async function runTeam(rt: Runtime, team: TeamFile, signal: AbortSignal | undefi
       if (!msgs.length) continue;
       const body = `New message(s) from your team:\n${formatMessages(msgs)}`;
       if (rt.steer(label, body)) appendLog(log, "steered", { mate, count: msgs.length });
-      else for (const m of msgs) mailbox.send(m.from, mate, m.text); // worker just finished: redeliver with next task
+      else for (const m of msgs) mailbox.send(m.from, mate, m.text, { kind: m.kind, replyTo: m.replyTo }); // worker just finished: redeliver with next task
     }
+    for (const m of mates) wake(m);
   }, 600);
 
   const executeTask = async (mate: TeamFile["teammates"][number], task: TaskRecord): Promise<void> => {
@@ -256,20 +285,23 @@ async function runTeam(rt: Runtime, team: TeamFile, signal: AbortSignal | undefi
       return;
     }
 
-    // 2) Implementation in an isolated worktree.
+    // 2) Implementation on a per-task branch checked out in the teammate's HOME worktree (stable cwd for the
+    //    resident process; the branch, diff, scope check, gates and review behave as with a dedicated worktree).
     let wtPath: string | undefined;
     let branch: string | undefined;
     let keepBranch = false;
     let cwd = rt.cwd;
     try {
       if (root) {
-        const wt = await createWorktree(root, `${team.name}-${task.id}`, `swarm/${team.name}/${task.id}`);
-        wtPath = wt.path;
-        branch = wt.branch;
-        cwd = wt.path;
+        const home = await homeFor(mate.name);
+        branch = `swarm/${team.name}/${task.id}`;
+        await deleteBranch(root, branch); // leftover from an earlier run
+        await startTaskBranch(home, branch, (await headSha(root)) ?? "HEAD");
+        wtPath = home;
+        cwd = home;
         const depBranches = task.deps.map((d) => store.get(d)?.branch).filter((b): b is string => !!b);
         if (depBranches.length) {
-          const m = await mergeBranchesInto(wt.path, depBranches);
+          const m = await mergeBranchesInto(home, depBranches);
           if (!m.ok) return void store.fail(task.id, m.error ?? "dependency merge failed");
         }
       }
@@ -304,11 +336,12 @@ async function runTeam(rt: Runtime, team: TeamFile, signal: AbortSignal | undefi
           messages: mailbox.drain(mate.name),
           feedback,
           org: renderOrgChart(team.teammates, store.list(), mate.name),
+          continuing: rt.hasResident(residentKey(mate.name)),
         });
         active.set(mate.name, label);
         let res;
         try {
-          res = await rt.run({ label, task: prompt, agent, model: mate.model, cwd, signal, steerable: true, team: teamCtx, teamName: team.name, sessionDir });
+          res = await rt.run({ label, task: prompt, agent, model: mate.model, cwd, signal, steerable: true, team: teamCtx, teamName: team.name, sessionDir, resident: residentKey(mate.name) });
         } finally {
           active.delete(mate.name);
         }
@@ -407,7 +440,7 @@ async function runTeam(rt: Runtime, team: TeamFile, signal: AbortSignal | undefi
       appendLog(log, "task_failed", { task: task.id, mate: mate.name, error: truncate(lastError, 300) });
     } finally {
       if (root && wtPath) {
-        await removeWorktree(root, wtPath);
+        await releaseTaskBranch(wtPath); // detach so the branch can be kept (or deleted when nothing changed)
         if (branch && !keepBranch) await deleteBranch(root, branch);
       }
     }
@@ -432,6 +465,9 @@ async function runTeam(rt: Runtime, team: TeamFile, signal: AbortSignal | undefi
     );
   } finally {
     clearInterval(watcher);
+    await rt.closeResidents(`${team.name}/`); // teammates go home; their tmux windows stay open on a shell
+    clearAllPresence(dir);
+    if (root) for (const h of homes.values()) await removeWorktree(root, h);
     removeTeamRunning(rt.cwd, team.name);
   }
   store.settleBlocked();

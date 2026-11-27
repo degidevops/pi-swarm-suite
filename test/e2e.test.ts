@@ -100,7 +100,9 @@ describe("e2e: team", () => {
     expect(r).toContain("/swarm merge t1");
     expect(fs.existsSync(path.join(cwd, "b.txt"))).toBe(false); // nothing merged yet
     const inv = readInvocations(logFile).filter((i) => i.mode === "rpc");
-    expect(inv.length).toBeGreaterThanOrEqual(3);
+    // Resident teammates: one process per teammate that worked (2 teammates, 3 tasks), not one per task.
+    expect(inv.length).toBeGreaterThanOrEqual(1);
+    expect(inv.length).toBeLessThanOrEqual(2);
     expect(inv.every((i) => i.tools?.includes("team_message") && i.ext === "/fake/ext/index.ts")).toBe(true);
 
     const merged = await mergeTeam(rt, "t1");

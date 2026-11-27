@@ -19,12 +19,39 @@ export interface WorkerOptions {
   env?: Record<string, string>;
   /** Session directory for workers that persist across sessions (ROADMAP #3). */
   sessionDir?: string;
+  /** Resident mode: the process stays alive after a task and runs further tasks via `turn()`. `task` is unused. */
+  persistent?: boolean;
   onUsage?: (delta: Partial<Usage>) => void;
   onProgress?: (line: string) => void;
   /** Every parsed event the child emits (JSON mode: all records; RPC mode: all except command responses). */
   onEvent?: (ev: unknown) => void;
   /** Raw stderr chunks from the child. */
   onStderr?: (chunk: string) => void;
+}
+
+/** Per-turn callbacks and cancellation of a resident worker (they change with every task it is given). */
+export interface TurnHooks {
+  label: string;
+  signal?: AbortSignal;
+  onUsage?: (delta: Partial<Usage>) => void;
+  onProgress?: (line: string) => void;
+  onEvent?: (ev: unknown) => void;
+  onStderr?: (chunk: string) => void;
+}
+
+/** What Runtime needs from a long-lived worker (RpcWorker and TmuxWorker in persistent mode). */
+export interface ResidentWorker {
+  /** Run one task in the live process; resolves when the agent settles. Process stays alive. */
+  turn(task: string, hooks: TurnHooks): Promise<WorkerResult>;
+  steer(text: string): boolean;
+  abort(): void;
+  probe(timeoutMs?: number): Promise<import("./monitor.ts").ProbeResult>;
+  /** True once the process has ended (closed, crashed or killed). */
+  readonly dead: boolean;
+  /** tmux window, when the worker has one. */
+  readonly window?: string;
+  /** End the process (orderly). */
+  close(): Promise<void>;
 }
 
 type Json = Record<string, unknown>;
